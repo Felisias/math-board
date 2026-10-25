@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Доска для уроков</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --paper: #f7f5ef;
+    --card: #ffffff;
+    --ink: #1d2a3a;
+    --muted: #64707d;
+    --line: #e2ddd1;
+    --accent: #2457c5;
+    --accent-ink: #ffffff;
+    --grid: #dfe7f3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+    background-color: var(--paper);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 28px 28px;
+    min-height: 100vh;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 72px 16px 48px; }
+  h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; }
+  h1 span { color: var(--accent); }
+  p.lead { font-size: 18px; color: var(--muted); margin: 0 0 32px; max-width: 560px; line-height: 1.5; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 22px; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(29,42,58,.06);
+    margin-bottom: 18px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  button, .btn {
+    font: inherit; font-weight: 600; border: 0; cursor: pointer; border-radius: 10px;
+    padding: 12px 18px; background: var(--accent); color: var(--accent-ink);
+  }
+  button:hover { filter: brightness(1.07); }
+  button.secondary { background: #eef1f6; color: var(--ink); }
+  input {
+    font: inherit; flex: 1; min-width: 200px; padding: 11px 13px; border-radius: 10px;
+    border: 1px solid var(--line); background: #fbfaf7; color: var(--ink);
+  }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li a {
+    display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 10px;
+    color: var(--ink); text-decoration: none;
+  }
+  li a:hover { background: #f2f0ea; }
+  li small { color: var(--muted); white-space: nowrap; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px; }
+  .features div { font-size: 14px; color: var(--muted); line-height: 1.45; }
+  .features b { color: var(--ink); display: block; margin-bottom: 2px; }
+  .empty { color: var(--muted); font-size: 14px; }
+  #status { color: var(--muted); font-size: 14px; margin-top: 10px; min-height: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Доска для уроков <span>математики</span></h1>
+  <p class="lead">Создайте доску, отправьте ссылку ученику и рисуйте вместе в реальном времени. Регистрация не нужна.</p>
+
+  <div class="card">
+    <div class="row">
+      <button id="create">Создать новую доску</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>Войти по ссылке</h2>
+    <form class="row" id="join">
+      <input id="link" placeholder="Вставьте ссылку на доску" autocomplete="off">
+      <button class="secondary" type="submit">Открыть</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Мои доски</h2>
+    <ul id="recent"></ul>
+  </div>
+
+  <div class="card">
+    <h2>Что умеет</h2>
+    <div class="features">
+      <div><b>Рисование</b>Карандаш, маркер-выделитель, ластик, указка</div>
+      <div><b>Фигуры</b>Отрезки, стрелки, прямоугольники, окружности, треугольники</div>
+      <div><b>Формулы</b>Дроби, корни, степени, системы — как в учебнике</div>
+      <div><b>Графики</b>Пишете y = x² − 2x — график строится сам</div>
+      <div><b>Фоны</b>Клетка, точки, линейка, координатная плоскость</div>
+      <div><b>Страницы</b>Несколько листов, картинки, печать в PDF</div>
+    </div>
+  </div>
+</main>
+<script>
+  const status = document.getElementById('status');
+  document.getElementById('create').onclick = async () => {
+    status.textContent = 'Создаю доску… Если сервер спал, это может занять до минуты.';
+    try {
+      const r = await fetch('/api/boards', { method: 'POST' });
+      const { id } = await r.json();
+      location.href = '/b/' + id;
+    } catch {
+      status.textContent = 'Не получилось связаться с сервером. Попробуйте ещё раз.';
+    }
+  };
+  document.getElementById('join').onsubmit = (e) => {
+    e.preventDefault();
+    const v = document.getElementById('link').value.trim();
+    const m = v.match(/(?:\/b\/)?([a-z0-9]{6,20})\/?$/);
+    if (m) location.href = '/b/' + m[1];
+    else status.textContent = 'Не похоже на ссылку на доску.';
+  };
+  let recent = [];
+  try { recent = JSON.parse(localStorage.getItem('wb:recent') || '[]'); } catch {}
+  const ul = document.getElementById('recent');
+  if (!recent.length) ul.innerHTML = '<li class="empty">Здесь появятся доски, которые вы открывали.</li>';
+  for (const r of recent) {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = '/b/' + r.id;
+    const name = document.createElement('span');
+    name.textContent = r.title || 'Доска ' + r.id;
+    const when = document.createElement('small');
+    when.textContent = new Date(r.at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    a.append(name, when);
+    li.append(a);
+    ul.append(li);
+  }
+</script>
+</body>
+</html>
