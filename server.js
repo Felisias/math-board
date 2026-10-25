@@ -1,5 +1,6 @@
 // Онлайн-доска для уроков математики.
-// Сервер: раздаёт страницы и синхронизирует доски через WebSocket.
+// Сервер: раздаёт страницы, синхронизирует доски через WebSocket
+// и передаёт служебные сообщения для голосовой связи (WebRTC).
 'use strict';
 
 const http = require('http');
@@ -14,6 +15,23 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_MESSAGE = 6 * 1024 * 1024; // одно сообщение (картинка) до 6 МБ
 const MAX_BOARD = 40 * 1024 * 1024; // вся доска до ~40 МБ
 
+// Серверы для голосовой связи. По умолчанию только STUN.
+// Свой TURN можно задать переменной окружения ICE_SERVERS (JSON-массив), например:
+// [{"urls":"turn:turn.example.com:443?transport=tcp","username":"u","credential":"p"}]
+const DEFAULT_ICE = [
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+];
+let ICE_SERVERS = DEFAULT_ICE;
+if (process.env.ICE_SERVERS) {
+  try {
+    const extra = JSON.parse(process.env.ICE_SERVERS);
+    if (Array.isArray(extra)) ICE_SERVERS = [...extra, ...DEFAULT_ICE];
+  } catch (e) {
+    console.error('ICE_SERVERS: неверный JSON', e.message);
+  }
+}
+
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 // ---------- утилиты ----------
@@ -25,9 +43,10 @@ function randomId(len = 10) {
   return s;
 }
 const BOARD_ID_RE = /^[a-z0-9]{6,20}$/;
+const CLIENT_ID_RE = /^[a-z0-9]{6,20}$/;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const BACKGROUNDS = new Set(['blank', 'grid', 'dots', 'lines', 'coord']);
-const OBJECT_TYPES = new Set(['stroke', 'shape', 'text', 'math', 'graph', 'image']);
+const OBJECT_TYPES = new Set(['stroke', 'shape', 'text', 'math', 'graph', 'image', 'plot', 'point', 'curve']);
 
 // ---------- статические файлы ----------
 const MIME = {
@@ -73,6 +92,11 @@ function serveStatic(req, res, urlPath) {
   sendFile(res, file, cache);
 }
 
+function json(res, data) {
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+  res.end(JSON.stringify(data));
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
@@ -80,8 +104,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && p === '/api/boards') {
     const id = randomId(10);
     getBoard(id); // создаём сразу, чтобы ссылка работала
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ id }));
+    return json(res, { id });
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405);
@@ -91,6 +114,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     return res.end('ok');
   }
+  if (p === '/api/ice') return json(res, { iceServers: ICE_SERVERS });
   if (p === '/' || p === '/index.html') return sendFile(res, path.join(PUBLIC_DIR, 'index.html'), 0);
   const m = p.match(/^\/b\/([^/]+)\/?$/);
   if (m) {
@@ -104,11 +128,25 @@ const server = http.createServer((req, res) => {
 });
 
 // ---------- хранение досок ----------
-// Board: { id, title, pages: [{ id, bg, objects: [] }], created }
-const boards = new Map(); // id -> { data, clients:Set, fresh, saveTimer, evictTimer, size }
+// Board: { id, title, notebooks: [{ id, title }], pages: [{ id, nb, bg, objects: [] }], created }
+const boards = new Map(); // id -> { data, clients:Set, fresh, saveTimer, evictTimer }
 
-function newPage(bg = 'grid') {
-  return { id: randomId(8), bg, objects: [] };
+function newPage(nb, bg = 'grid') {
+  return { id: randomId(8), nb, bg, objects: [] };
+}
+
+// Приводим доску к текущему формату (у старых досок не было блокнотов)
+function normalize(data) {
+  if (!Array.isArray(data.pages)) data.pages = [];
+  if (!Array.isArray(data.notebooks) || !data.notebooks.length) {
+    data.notebooks = [{ id: randomId(8), title: 'Блокнот 1' }];
+  }
+  const ids = new Set(data.notebooks.map((n) => n.id));
+  for (const pg of data.pages) if (!ids.has(pg.nb)) pg.nb = data.notebooks[0].id;
+  for (const nb of data.notebooks) {
+    if (!data.pages.some((pg) => pg.nb === nb.id)) data.pages.push(newPage(nb.id));
+  }
+  return data;
 }
 
 function boardFile(id) {
@@ -125,7 +163,8 @@ function getBoard(id) {
     /* новой доски ещё нет */
   }
   const fresh = !data;
-  if (!data) data = { id, title: '', pages: [newPage()], created: Date.now() };
+  if (!data) data = { id, title: '', notebooks: [], pages: [], created: Date.now() };
+  normalize(data);
   b = { id, data, clients: new Set(), fresh, saveTimer: null, evictTimer: null };
   boards.set(id, b);
   return b;
@@ -151,13 +190,9 @@ function changed(b) {
   b.saveTimer = setTimeout(() => saveNow(b), 1500);
 }
 
-function findPage(b, pageId) {
-  return b.data.pages.find((pg) => pg.id === pageId);
-}
-
-function isEmptyBoard(b) {
-  return b.data.pages.every((pg) => pg.objects.length === 0);
-}
+const findPage = (b, pageId) => b.data.pages.find((pg) => pg.id === pageId);
+const findNotebook = (b, nbId) => b.data.notebooks.find((n) => n.id === nbId);
+const isEmptyBoard = (b) => b.data.pages.every((pg) => pg.objects.length === 0);
 
 // ---------- проверка входящих данных ----------
 function validObject(o) {
@@ -176,10 +211,15 @@ function validPage(pg) {
     pg &&
     typeof pg.id === 'string' &&
     pg.id.length <= 40 &&
+    typeof pg.nb === 'string' &&
     BACKGROUNDS.has(pg.bg) &&
     Array.isArray(pg.objects) &&
     pg.objects.every(validObject)
   );
+}
+
+function validNotebook(nb) {
+  return nb && typeof nb.id === 'string' && nb.id.length > 0 && nb.id.length <= 40 && typeof nb.title === 'string';
 }
 
 // ---------- WebSocket ----------
@@ -195,20 +235,30 @@ function broadcast(b, msg, except) {
 }
 
 function usersOf(b) {
-  return [...b.clients].map((c) => c.user);
+  return [...b.clients].filter((c) => !c.replaced).map((c) => c.user);
 }
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, 'http://localhost');
   const boardId = url.searchParams.get('board') || '';
   if (!BOARD_ID_RE.test(boardId)) return ws.close(1008, 'bad board');
+  const cid = url.searchParams.get('cid') || '';
 
   const b = getBoard(boardId);
   if (b.evictTimer) {
     clearTimeout(b.evictTimer);
     b.evictTimer = null;
   }
-  ws.user = { id: randomId(6), name: 'Гость', color: '#64748b' };
+  // Постоянный id вкладки: после переподключения человек остаётся «тем же»,
+  // и голосовая связь не рвётся.
+  const userId = CLIENT_ID_RE.test(cid) ? cid : randomId(10);
+  for (const old of b.clients) {
+    if (old.user.id === userId) {
+      old.replaced = true;
+      old.terminate();
+    }
+  }
+  ws.user = { id: userId, name: 'Гость', color: '#64748b', voice: false, muted: false };
   ws.isAlive = true;
   b.clients.add(ws);
 
@@ -225,7 +275,7 @@ wss.on('connection', (ws, req) => {
     }
     if (!m || typeof m.t !== 'string') return;
     try {
-      handle(b, ws, m);
+      handle(b, ws, m, raw.length);
     } catch (e) {
       console.error('Ошибка обработки', m.t, e.message);
     }
@@ -233,7 +283,7 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     b.clients.delete(ws);
-    broadcast(b, { t: 'leave', uid: ws.user.id });
+    if (!ws.replaced) broadcast(b, { t: 'leave', uid: ws.user.id });
     if (b.clients.size === 0) {
       saveNow(b);
       // освобождаем память через 10 минут без участников
@@ -244,17 +294,32 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-function handle(b, ws, m) {
+function setUserFields(ws, m) {
+  if (typeof m.name === 'string') ws.user.name = m.name.trim().slice(0, 40) || 'Гость';
+  if (typeof m.color === 'string' && COLOR_RE.test(m.color)) ws.user.color = m.color;
+  if (typeof m.voice === 'boolean') ws.user.voice = m.voice;
+  if (typeof m.muted === 'boolean') ws.user.muted = m.muted;
+}
+
+function handle(b, ws, m, size) {
   const page = typeof m.page === 'string' ? findPage(b, m.page) : null;
 
   switch (m.t) {
     case 'ping':
       return send(ws, { t: 'pong' });
 
-    case 'hello': {
-      if (typeof m.name === 'string') ws.user.name = m.name.trim().slice(0, 40) || 'Гость';
-      if (typeof m.color === 'string' && COLOR_RE.test(m.color)) ws.user.color = m.color;
+    case 'hello':
+    case 'voice':
+      setUserFields(ws, m);
       return broadcast(b, { t: 'users', users: usersOf(b) });
+
+    case 'rtc': {
+      // служебные сообщения WebRTC — только адресату
+      if (typeof m.to !== 'string') return;
+      for (const c of b.clients) {
+        if (c.user.id === m.to && !c.replaced) return send(c, { ...m, from: ws.user.id });
+      }
+      return;
     }
 
     case 'title': {
@@ -294,7 +359,6 @@ function handle(b, ws, m) {
     }
 
     case 'set': {
-      // очистка страницы и её отмена
       if (!page || !Array.isArray(m.objects) || !m.objects.every(validObject)) return;
       page.objects = m.objects;
       changed(b);
@@ -302,16 +366,19 @@ function handle(b, ws, m) {
     }
 
     case 'page-add': {
-      if (!validPage(m.pageData) || findPage(b, m.pageData.id)) return;
-      if (b.data.pages.length >= 100) return;
+      const pd = m.pageData;
+      if (!validPage(pd) || findPage(b, pd.id) || !findNotebook(b, pd.nb)) return;
+      if (b.data.pages.length >= 500) return;
       const idx = Number.isInteger(m.index) ? Math.max(0, Math.min(m.index, b.data.pages.length)) : b.data.pages.length;
-      b.data.pages.splice(idx, 0, m.pageData);
+      b.data.pages.splice(idx, 0, pd);
       changed(b);
-      return broadcast(b, { t: 'page-add', pageData: m.pageData, index: idx }, ws);
+      return broadcast(b, { t: 'page-add', pageData: pd, index: idx }, ws);
     }
 
     case 'page-remove': {
-      if (!page || b.data.pages.length <= 1) return;
+      if (!page) return;
+      // в блокноте должна остаться хотя бы одна страница
+      if (!b.data.pages.some((pg) => pg !== page && pg.nb === page.nb)) return;
       b.data.pages = b.data.pages.filter((pg) => pg !== page);
       changed(b);
       return broadcast(b, { t: 'page-remove', page: page.id }, ws);
@@ -324,15 +391,50 @@ function handle(b, ws, m) {
       return broadcast(b, { t: 'page-bg', page: page.id, bg: m.bg }, ws);
     }
 
+    case 'nb-add': {
+      // новый блокнот сразу с первой страницей
+      if (!validNotebook(m.nb) || findNotebook(b, m.nb.id) || b.data.notebooks.length >= 200) return;
+      if (!validPage(m.pageData) || m.pageData.nb !== m.nb.id || findPage(b, m.pageData.id)) return;
+      const nb = { id: m.nb.id, title: m.nb.title.slice(0, 80) };
+      const idx = Number.isInteger(m.index) ? Math.max(0, Math.min(m.index, b.data.notebooks.length)) : b.data.notebooks.length;
+      b.data.notebooks.splice(idx, 0, nb);
+      b.data.pages.push(m.pageData);
+      changed(b);
+      return broadcast(b, { t: 'nb-add', nb, pageData: m.pageData, index: idx }, ws);
+    }
+
+    case 'nb-update': {
+      if (!validNotebook(m.nb)) return;
+      const nb = findNotebook(b, m.nb.id);
+      if (!nb) return;
+      nb.title = m.nb.title.slice(0, 80);
+      changed(b);
+      return broadcast(b, { t: 'nb-update', nb }, ws);
+    }
+
+    case 'nb-remove': {
+      const nb = findNotebook(b, m.nb);
+      if (!nb || b.data.notebooks.length <= 1) return;
+      b.data.notebooks = b.data.notebooks.filter((n) => n !== nb);
+      b.data.pages = b.data.pages.filter((pg) => pg.nb !== nb.id);
+      changed(b);
+      return broadcast(b, { t: 'nb-remove', nb: nb.id }, ws);
+    }
+
     case 'restore': {
       // Бесплатный Render стирает диск при перезапуске. Если доска на сервере пустая,
       // а у участника в браузере есть её копия — восстанавливаем из копии.
-      const pages = m.board && m.board.pages;
-      if (!isEmptyBoard(b) || !Array.isArray(pages) || pages.length === 0 || pages.length > 100) return;
-      if (!pages.every(validPage)) return;
-      if (raw(m).length > MAX_BOARD) return;
-      b.data.pages = pages;
-      if (typeof m.board.title === 'string') b.data.title = m.board.title.slice(0, 120);
+      const bd = m.board;
+      if (!bd || !isEmptyBoard(b) || size > MAX_BOARD) return;
+      const pages = bd.pages;
+      if (!Array.isArray(pages) || pages.length === 0 || pages.length > 500) return;
+      const notebooks = Array.isArray(bd.notebooks) ? bd.notebooks.filter(validNotebook) : [];
+      const fixed = pages.map((pg) => ({ ...pg, nb: typeof pg.nb === 'string' ? pg.nb : '' }));
+      if (!fixed.every(validPage)) return;
+      b.data.notebooks = notebooks.map((n) => ({ id: n.id, title: n.title.slice(0, 80) }));
+      b.data.pages = fixed;
+      if (typeof bd.title === 'string') b.data.title = bd.title.slice(0, 120);
+      normalize(b.data);
       changed(b);
       // отправителю не шлём: у него уже есть эта доска (и, возможно, свежие изменения поверх)
       return broadcast(b, { t: 'init', board: b.data, fresh: false, users: usersOf(b), restored: true }, ws);
@@ -346,10 +448,6 @@ function handle(b, ws, m) {
     case 'summon':
       return broadcast(b, { ...m, uid: ws.user.id }, ws);
   }
-}
-
-function raw(m) {
-  return JSON.stringify(m);
 }
 
 // Проверка «живых» соединений

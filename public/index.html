@@ -3,18 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Доска для уроков</title>
+<title>Доска</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+  // тема: авто (как в системе), светлая или тёмная — выбирается на доске
+  (function () {
+    var t = 'auto';
+    try { t = JSON.parse(localStorage.getItem('wb:theme') || '"auto"'); } catch (e) {}
+    var dark = t === 'dark' || (t === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  })();
+</script>
 <style>
   :root {
-    --paper: #f7f5ef;
-    --card: #ffffff;
-    --ink: #1d2a3a;
-    --muted: #64707d;
-    --line: #e2ddd1;
-    --accent: #2457c5;
-    --accent-ink: #ffffff;
-    --grid: #dfe7f3;
+    --paper: #f7f5ef; --card: #ffffff; --ink: #1d2a3a; --muted: #64707d; --line: #e2ddd1;
+    --accent: #2457c5; --accent-ink: #ffffff; --grid: #dfe7f3; --hover: #f2f0ea; --input: #fbfaf7; --secondary: #eef1f6;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper: #14181e; --card: #1d232c; --ink: #e6ebf2; --muted: #95a1b0; --line: #2d3541;
+    --accent: #5b8dff; --accent-ink: #0e1420; --grid: #1f2631; --hover: #262e3a; --input: #161b22; --secondary: #2a323e;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
   body {
@@ -28,82 +37,66 @@
     background-size: 28px 28px;
     min-height: 100vh;
   }
-  main { max-width: 760px; margin: 0 auto; padding: 72px 16px 48px; }
-  h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.1; margin: 0 0 14px; letter-spacing: -0.02em; }
+  main { max-width: 640px; margin: 0 auto; padding: 72px 16px 48px; }
+  h1 { font-size: clamp(30px, 6vw, 44px); line-height: 1.1; margin: 0 0 28px; letter-spacing: -0.02em; }
   h1 span { color: var(--accent); }
-  p.lead { font-size: 18px; color: var(--muted); margin: 0 0 32px; max-width: 560px; line-height: 1.5; }
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    padding: 22px; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(29,42,58,.06);
-    margin-bottom: 18px;
+    padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06);
+    margin-bottom: 16px;
   }
   .row { display: flex; gap: 10px; flex-wrap: wrap; }
-  button, .btn {
+  button {
     font: inherit; font-weight: 600; border: 0; cursor: pointer; border-radius: 10px;
     padding: 12px 18px; background: var(--accent); color: var(--accent-ink);
   }
   button:hover { filter: brightness(1.07); }
-  button.secondary { background: #eef1f6; color: var(--ink); }
+  button.secondary { background: var(--secondary); color: var(--ink); }
+  #create { width: 100%; font-size: 17px; padding: 15px; }
   input {
     font: inherit; flex: 1; min-width: 200px; padding: 11px 13px; border-radius: 10px;
-    border: 1px solid var(--line); background: #fbfaf7; color: var(--ink);
+    border: 1px solid var(--line); background: var(--input); color: var(--ink);
   }
-  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
   ul { list-style: none; padding: 0; margin: 0; }
   li a {
     display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 10px;
     color: var(--ink); text-decoration: none;
   }
-  li a:hover { background: #f2f0ea; }
+  li a:hover { background: var(--hover); }
   li small { color: var(--muted); white-space: nowrap; }
-  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px; }
-  .features div { font-size: 14px; color: var(--muted); line-height: 1.45; }
-  .features b { color: var(--ink); display: block; margin-bottom: 2px; }
-  .empty { color: var(--muted); font-size: 14px; }
   #status { color: var(--muted); font-size: 14px; margin-top: 10px; min-height: 20px; }
+  #status:empty { display: none; }
+  #recentCard[hidden] { display: none; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Доска для уроков <span>математики</span></h1>
-  <p class="lead">Создайте доску, отправьте ссылку ученику и рисуйте вместе в реальном времени. Регистрация не нужна.</p>
+  <h1>Доска <span>для уроков</span></h1>
 
   <div class="card">
-    <div class="row">
-      <button id="create">Создать новую доску</button>
-    </div>
+    <button id="create">Создать доску</button>
     <div id="status"></div>
   </div>
 
   <div class="card">
     <h2>Войти по ссылке</h2>
     <form class="row" id="join">
-      <input id="link" placeholder="Вставьте ссылку на доску" autocomplete="off">
+      <input id="link" placeholder="Ссылка на доску" autocomplete="off">
       <button class="secondary" type="submit">Открыть</button>
     </form>
   </div>
 
-  <div class="card">
+  <div class="card" id="recentCard" hidden>
     <h2>Мои доски</h2>
     <ul id="recent"></ul>
-  </div>
-
-  <div class="card">
-    <h2>Что умеет</h2>
-    <div class="features">
-      <div><b>Рисование</b>Карандаш, маркер-выделитель, ластик, указка</div>
-      <div><b>Фигуры</b>Отрезки, стрелки, прямоугольники, окружности, треугольники</div>
-      <div><b>Формулы</b>Дроби, корни, степени, системы — как в учебнике</div>
-      <div><b>Графики</b>Пишете y = x² − 2x — график строится сам</div>
-      <div><b>Фоны</b>Клетка, точки, линейка, координатная плоскость</div>
-      <div><b>Страницы</b>Несколько листов, картинки, печать в PDF</div>
-    </div>
   </div>
 </main>
 <script>
   const status = document.getElementById('status');
   document.getElementById('create').onclick = async () => {
-    status.textContent = 'Создаю доску… Если сервер спал, это может занять до минуты.';
+    status.textContent = 'Создаю… Если сервер спал, это может занять до минуты.';
     try {
       const r = await fetch('/api/boards', { method: 'POST' });
       const { id } = await r.json();
@@ -122,7 +115,7 @@
   let recent = [];
   try { recent = JSON.parse(localStorage.getItem('wb:recent') || '[]'); } catch {}
   const ul = document.getElementById('recent');
-  if (!recent.length) ul.innerHTML = '<li class="empty">Здесь появятся доски, которые вы открывали.</li>';
+  if (recent.length) document.getElementById('recentCard').hidden = false;
   for (const r of recent) {
     const li = document.createElement('li');
     const a = document.createElement('a');
@@ -135,6 +128,7 @@
     li.append(a);
     ul.append(li);
   }
+  window.matchMedia && matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => location.reload());
 </script>
 </body>
 </html>

@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Доска</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+  (function () {
+    var t = 'auto';
+    try { t = JSON.parse(localStorage.getItem('wb:theme') || '"auto"'); } catch (e) {}
+    var dark = t === 'dark' || (t === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  })();
+</script>
 <link rel="stylesheet" href="/vendor/katex/katex.min.css">
 <link rel="stylesheet" href="/css/board.css">
 </head>
@@ -23,6 +31,19 @@
     <button class="icon-btn" id="redo" title="Повторить (Ctrl+Y)" aria-label="Повторить">
       <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg>
     </button>
+    <div class="voice" id="voiceBox">
+      <button class="voice-join" id="voiceJoin" title="Подключиться к голосовой связи">
+        <svg viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0116 0v3"/><rect x="3" y="14" width="4" height="7" rx="1.5"/><rect x="17" y="14" width="4" height="7" rx="1.5"/></svg>
+        <span>Голос</span>
+      </button>
+      <button class="icon-btn voice-on" id="micBtn" title="Выключить микрофон" aria-label="Микрофон" hidden>
+        <svg viewBox="0 0 24 24" class="mic-on"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg>
+        <svg viewBox="0 0 24 24" class="mic-off"><path d="M15 9.5V6a3 3 0 00-5.8-1.1M9 9v2a3 3 0 004.8 2.4M5 11a7 7 0 0011.3 5.5M19 11a7 7 0 01-.5 2.6M12 18v3M3 3l18 18"/></svg>
+      </button>
+      <button class="icon-btn voice-on voice-leave" id="leaveBtn" title="Выйти из голосовой связи" aria-label="Выйти из голосовой связи" hidden>
+        <svg viewBox="0 0 24 24"><path d="M3.5 13.5c4.7-4.2 12.3-4.2 17 0l-1.8 2.6-3.4-1.3-.3-2.4a10 10 0 00-6 0l-.3 2.4-3.4 1.3z"/></svg>
+      </button>
+    </div>
     <div id="users"></div>
     <span id="conn" title="Соединение"></span>
     <button id="invite" class="primary-btn">Пригласить</button>
@@ -32,6 +53,7 @@
       </button>
       <div id="menu" class="dropdown" hidden>
         <button data-act="rename">Изменить моё имя</button>
+        <button data-act="theme" id="themeItem">Тема: как в системе</button>
         <button data-act="print">Печать / сохранить в PDF</button>
         <button data-act="save">Скачать доску (файл)</button>
         <button data-act="open">Открыть доску из файла</button>
@@ -57,7 +79,10 @@
       <button class="tool" data-tool="rect" title="Прямоугольник (R)"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
       <button class="tool" data-tool="ellipse" title="Окружность / эллипс (O)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg></button>
       <button class="tool" data-tool="triangle" title="Треугольник (Y)"><svg viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/></svg></button>
+      <button class="tool" data-tool="plot" title="Координатная плоскость (C) — растяните как прямоугольник"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="1.5" class="thin"/><path d="M12 5v14M5 12h14"/><path d="M12 5l-2 2.5M12 5l2 2.5M19 12l-2.5-2M19 12l-2.5 2"/></svg></button>
       <div class="sep"></div>
+      <button class="tool" data-tool="point" title="Точка (D)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.6" class="solid"/><path d="M12 4v2.5M12 17.5V20M4 12h2.5M17.5 12H20" class="thin"/></svg></button>
+      <button class="tool" data-tool="curve" title="Плавная кривая по точкам (B)"><svg viewBox="0 0 24 24"><path d="M3 18C6 6 10 4 12 11s6 7 9-5"/><circle cx="3" cy="18" r="1.7" class="solid"/><circle cx="12" cy="11" r="1.7" class="solid"/><circle cx="21" cy="6" r="1.7" class="solid"/></svg></button>
       <button class="tool" data-tool="text" title="Текст (T)"><svg viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg></button>
       <button class="tool" data-tool="math" title="Формула (F)"><svg viewBox="0 0 24 24"><path d="M17 5H7l6 7-6 7h10"/></svg></button>
       <button class="tool" data-tool="graph" title="График функции (G)"><svg viewBox="0 0 24 24"><path d="M3 12h18M12 3v18" class="thin"/><path d="M5 20c3-10 5-14 7-14s4 4 7 14"/></svg></button>
@@ -78,16 +103,20 @@
   <div id="stage">
     <canvas id="canvas"></canvas>
     <div id="mathLayer"></div>
-    <div id="overlay"></div>
     <textarea id="textEditor" spellcheck="false" hidden></textarea>
   </div>
 
-  <!-- Страницы -->
+  <!-- Блокноты и страницы -->
   <div id="pagebar">
-    <button class="icon-btn" id="prevPage" title="Предыдущая страница" aria-label="Предыдущая страница"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
-    <span id="pageLabel">1 / 1</span>
-    <button class="icon-btn" id="nextPage" title="Следующая страница" aria-label="Следующая страница"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
-    <button class="icon-btn" id="addPage" title="Новая страница" aria-label="Новая страница"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button class="nb-btn" id="nbBtn" title="Блокноты и страницы">
+      <svg viewBox="0 0 24 24"><path d="M6 3h11a2 2 0 012 2v14a2 2 0 01-2 2H6z"/><path d="M6 3v18M4 7h4M4 12h4M4 17h4M10 8h6"/></svg>
+      <span id="nbName">Блокнот 1</span>
+    </button>
+    <div class="vsep"></div>
+    <button class="icon-btn" id="prevPage" title="Предыдущая страница (PgUp)" aria-label="Предыдущая страница"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button class="text-btn" id="pageLabel" title="Все страницы">1 / 1</button>
+    <button class="icon-btn" id="nextPage" title="Следующая страница (PgDn)" aria-label="Следующая страница"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+    <button class="icon-btn" id="addPage" title="Новая страница в этом блокноте" aria-label="Новая страница"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
     <div class="vsep"></div>
     <select id="bgSelect" title="Фон страницы">
       <option value="grid">Клетка</option>
@@ -96,7 +125,7 @@
       <option value="lines">Линейка</option>
       <option value="blank">Чистый</option>
     </select>
-    <div class="vsep"></div>
+    <div class="vsep summon-sep"></div>
     <button class="text-btn" id="summon" title="Показать всем участникам то, что видите вы">Все ко мне</button>
   </div>
 
@@ -105,6 +134,28 @@
     <button class="text-btn" id="zoomLabel" title="Вернуть 100%">100%</button>
     <button class="icon-btn" id="zoomIn" title="Приблизить" aria-label="Приблизить"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
     <button class="icon-btn" id="zoomFit" title="Показать всё" aria-label="Показать всё"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  </div>
+</div>
+
+<!-- Окно блокнотов -->
+<div id="nbOverlay" class="nb-overlay" hidden>
+  <div class="nb-panel" role="dialog" aria-label="Блокноты">
+    <div class="nb-top">
+      <div class="nb-shelf" id="nbShelf"></div>
+      <button class="icon-btn nb-close" id="nbClose" title="Закрыть (Esc)" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="nb-info">
+      <input id="nbTitle" maxlength="80" placeholder="Название блокнота" autocomplete="off">
+      <span id="nbCount"></span>
+      <div class="spacer"></div>
+      <button class="text-btn danger" id="nbDelete">Удалить блокнот</button>
+    </div>
+    <div class="nb-stage" id="nbStage">
+      <button class="nb-arrow left" id="nbPrev" aria-label="Назад"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="nb-flow" id="nbFlow"></div>
+      <button class="nb-arrow right" id="nbNext" aria-label="Вперёд"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+    </div>
+    <div class="nb-dots" id="nbDots"></div>
   </div>
 </div>
 
@@ -125,7 +176,7 @@
     <div class="snippets" id="snippets"></div>
     <textarea id="mathInput" rows="3" spellcheck="false" placeholder="Например: x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"></textarea>
     <div id="mathPreview" class="preview"></div>
-    <p class="hint">Запись в формате LaTeX. Нажимайте кнопки выше — шаблоны вставятся сами. Ctrl+Enter — вставить.</p>
+    <p class="hint">Запись в формате LaTeX. Кнопки выше вставляют шаблоны. Ctrl+Enter — вставить.</p>
     <div class="modal-actions">
       <button type="button" class="secondary-btn" data-close>Отмена</button>
       <button type="submit" class="primary-btn">Вставить</button>
@@ -133,18 +184,39 @@
   </form>
 </div>
 
-<!-- Окно: график -->
+<!-- Окно: график и координатная плоскость -->
 <div class="modal" id="graphModal" hidden>
   <form class="modal-card" id="graphForm">
-    <h3>График функции</h3>
+    <h3 id="graphTitle">График функции</h3>
+    <div id="plotSection" hidden>
+      <div class="plot-settings">
+        <label>Единичный отрезок
+          <select id="plotUnit">
+            <option value="0.5">½ клетки</option>
+            <option value="1">1 клетка</option>
+            <option value="2">2 клетки</option>
+            <option value="4">4 клетки</option>
+            <option value="5">5 клеток</option>
+          </select>
+        </label>
+        <label>Начало координат
+          <select id="plotOrigin">
+            <option value="center">В центре</option>
+            <option value="corner">Слева внизу</option>
+            <option value="left">Слева посередине</option>
+            <option value="bottom">Внизу посередине</option>
+          </select>
+        </label>
+      </div>
+      <div id="graphList"></div>
+    </div>
     <label class="field">y =
       <input id="graphInput" placeholder="x^2 - 2x + 1" autocomplete="off" spellcheck="false">
     </label>
     <div class="examples" id="graphExamples"></div>
-    <p class="hint" id="graphHint">Степень: ^ · умножение можно не писать (2x) · функции: sin, cos, tg, sqrt, abs, ln, log · модуль: |x|</p>
-    <p class="hint">Страница переключится на фон «Координаты». Одна клетка = 1.</p>
+    <p class="hint" id="graphHint">Степень: ^ · умножение можно не писать (2x) · sin, cos, tg, sqrt, abs, ln, log · модуль: |x|</p>
     <div class="modal-actions">
-      <button type="button" class="secondary-btn" data-close>Отмена</button>
+      <button type="button" class="secondary-btn" data-close>Закрыть</button>
       <button type="submit" class="primary-btn">Построить</button>
     </div>
   </form>
@@ -154,7 +226,7 @@
 <div class="modal" id="inviteModal" hidden>
   <div class="modal-card">
     <h3>Пригласить на доску</h3>
-    <p class="hint">Отправьте эту ссылку ученику. Все, у кого она есть, могут рисовать на доске.</p>
+    <p class="hint">Все, у кого есть эта ссылка, могут рисовать на доске.</p>
     <div class="copy-row">
       <input id="inviteLink" readonly>
       <button class="primary-btn" id="copyLink">Копировать</button>
@@ -170,6 +242,7 @@
 
 <script src="/vendor/katex/katex.min.js"></script>
 <script src="/js/mathparse.js"></script>
+<script src="/js/voice.js"></script>
 <script src="/js/board.js"></script>
 </body>
 </html>
