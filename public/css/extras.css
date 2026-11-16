@@ -87,3 +87,21 @@ kbd { display: inline-block; font: 600 12px/1 ui-monospace, Menlo, Consolas, mon
   .help-grid { grid-template-columns: 1fr; }
   #selBar button { width: 36px; height: 36px; }
 }
+
+/* ---------- прямое соединение по коду ---------- */
+.p2p-row { border-top: 1px solid var(--line); padding: 10px 0 4px; margin-top: 8px; }
+.p2p-row textarea { margin: 8px 0; font-size: 12px; min-height: 52px; word-break: break-all; }
+.p2p-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 14px; }
+.p2p-head .link-btn { margin-left: auto; }
+.p2p-head .wait { font-size: 13px; }
+.p2p-ok { color: #1a8f4c; font-weight: 600; font-size: 13px; }
+:root[data-theme="dark"] .p2p-ok { color: #5fd08a; }
+.p2p-step { color: var(--muted); font-size: 13px; }
+.inv-block > .row { margin-top: 8px; }
+#p2pLost {
+  position: fixed; left: 50%; top: 62px; transform: translateX(-50%); z-index: 60; max-width: min(640px, calc(100vw - 24px));
+  display: flex; align-items: center; gap: 14px; padding: 10px 12px 10px 16px; border-radius: 12px; font-size: 14px; line-height: 1.4;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line); box-shadow: 0 8px 28px rgba(0,0,0,.18);
+}
+#p2pLost[hidden] { display: none; }
+#p2pLost a { text-decoration: none; flex: none; }

@@ -327,7 +327,9 @@
   let ready = false;
   let everReady = false;
   let retry = 0;
+  let retryTimer = 0;
   const outbox = [];
+  const REMOTE = !!(window.P2P && window.P2P.isRemote(boardId));
   const PERSISTENT = new Set(['add', 'update', 'remove', 'set', 'order', 'page-add', 'page-remove', 'page-bg', 'title', 'nb-add', 'nb-update', 'nb-remove']);
 
   function setConn(state) {
@@ -338,7 +340,10 @@
 
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/ws?board=${encodeURIComponent(boardId)}&cid=${clientId}`);
+    // доска учителя, открытая по коду: вместо сервера — прямой канал (p2p.js)
+    ws = REMOTE
+      ? new window.P2P.Socket(boardId, clientId)
+      : new WebSocket(`${proto}://${location.host}/ws?board=${encodeURIComponent(boardId)}&cid=${clientId}`);
     setConn('wait');
     ws.onopen = () => {
       retry = 0;
@@ -357,7 +362,7 @@
       ready = false;
       setConn('wait');
       const delay = Math.min(8000, 400 * 2 ** retry++);
-      setTimeout(connect, delay);
+      retryTimer = setTimeout(connect, delay);
     };
     ws.onerror = () => {};
   }
@@ -372,7 +377,7 @@
   }, 25000);
 
   setTimeout(() => {
-    if (!everReady) toast('Сервер просыпается — это может занять до минуты…', 8000);
+    if (!everReady && !REMOTE) toast('Сервер просыпается — это может занять до минуты…', 8000);
   }, 3000);
 
   const hasObjects = (b) => b && Array.isArray(b.pages) && b.pages.some((p) => p.objects && p.objects.length);
@@ -4310,6 +4315,14 @@
   // интерфейс для дополнений (extras.js)
   window.WB = {
     boardId,
+    remote: REMOTE,
+    reconnect: () => {
+      if (ready || !ws || ws.readyState !== 3) return;
+      clearTimeout(retryTimer);
+      retry = 0;
+      connect();
+    },
+    title: () => (board && board.title) || '',
     on: (name, fn) => (hooks[name] = hooks[name] || []).push(fn),
     send,
     toast,

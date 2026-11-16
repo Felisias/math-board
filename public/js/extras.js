@@ -162,6 +162,7 @@
   const boardPath = '/b/' + WB.boardId;
 
   async function loadHost() {
+    if (WB.remote) return void (host = { local: false, remote: true });
     try {
       const r = await fetch('/api/host', { cache: 'no-store' });
       host = await r.json();
@@ -212,11 +213,20 @@
     const keepProvider = body.querySelector('select') ? body.querySelector('select').value : 'cloudflare';
     body.innerHTML = '';
     clearTimeout(pollTimer);
+    if (host.remote) {
+      body.append(el('p', { class: 'hint', text: 'Вы подключены к доске учителя напрямую, по коду. Пригласить других участников может учитель — в своём окне «Пригласить».' }));
+      return;
+    }
     if (!host.local) {
       body.append(el('p', { class: 'hint', text: 'Все, у кого есть эта ссылка, могут рисовать на доске.' }), linkRow(location.origin + boardPath, true));
       return;
     }
     body.append(el('p', { class: 'hint', text: 'Доска запущена на этом компьютере. Она доступна другим, пока компьютер включён и программа открыта.' }));
+
+    // --- напрямую, по коду ---
+    p2pBox = el('div', { class: 'inv-block' });
+    body.append(p2pBox);
+    renderP2P();
 
     // --- через интернет ---
     const t = host.tunnel || { state: 'off' };
@@ -262,8 +272,156 @@
     } else lan.append(el('p', { text: 'Компьютер сейчас не подключён к сети.' }));
     body.append(lan);
   }
+  // ---------- прямое соединение по коду (без сервера в интернете) ----------
+  let p2pBox = null;
+  let p2p = null; // состояние моста или null, если мост не запущен
+  let p2pBusy = false;
+  const p2pDraft = new Map(); // n -> текст в поле «код ученика»
+  const p2pErr = new Map(); // n -> сообщение об ошибке
+  const P2P_ERRORS = {
+    badcode: 'Это не похоже на код ученика. Скопируйте его целиком.',
+    notanswer: 'Это ваш собственный код приглашения. Нужен ответный код от ученика.',
+    unknown: 'Этот код от другого приглашения. Создайте новый код и отправьте ученику.',
+    used: 'Этот код уже использован.',
+    nobridge: 'Нет связи с модулем соединения. Перезапустите программу.',
+    fail: 'Не получилось. Попробуйте создать новый код.',
+  };
+  async function loadP2P() {
+    const st = window.P2P ? await window.P2P.status() : { error: 'nobridge' };
+    p2p = st.error ? null : st;
+  }
+  function renderP2P() {
+    if (!p2pBox || !p2pBox.isConnected) return;
+    p2pBox.innerHTML = '';
+    p2pBox.append(el('h5', { text: 'Напрямую, по коду — без серверов' }));
+    if (!p2p) {
+      p2pBox.append(el('p', { text: 'Работает в приложении «Доска» для Windows: компьютеры учителя и ученика соединяются напрямую.' }));
+      if (!host.desktop) {
+        const open = el('button', { class: 'link-btn', type: 'button', text: 'Включить в браузере (откроется служебная вкладка — не закрывайте её)' });
+        open.onclick = () => {
+          window.open('/p2p-bridge.html', 'wb-p2p-bridge');
+          setTimeout(async () => {
+            await loadP2P();
+            renderP2P();
+          }, 900);
+        };
+        p2pBox.append(el('p', {}, open));
+      }
+      return;
+    }
+    const mine = p2p.sessions.filter((s) => s.board === WB.boardId);
+    p2pBox.append(el('p', { text: 'Ученик открывает приложение «Доска» и нажимает «Войти по коду». Вы обмениваетесь кодами в мессенджере: вы отправляете свой, ученик присылает ответный. Делайте это сразу, не откладывая: коды живут около минуты.' }));
+    for (const s of mine) {
+      const row = el('div', { class: 'p2p-row' });
+      const drop = el('button', { class: 'link-btn', type: 'button', text: s.state === 'connected' ? 'Отключить' : 'Отменить' });
+      drop.onclick = async () => {
+        p2pDraft.delete(s.n);
+        p2pErr.delete(s.n);
+        await window.P2P.call('host-drop', { n: s.n });
+      };
+      const head = el('div', { class: 'p2p-head' }, el('b', { text: 'Ученик ' + s.num }));
+      if (s.state === 'connected') {
+        head.append(el('span', { class: 'p2p-ok', text: 'соединён' }), drop);
+        row.append(head);
+      } else if (s.state === 'connecting') {
+        head.append(el('span', { class: 'wait' }, el('span', { class: 'spinner' }), el('span', { text: 'соединяю…' })), drop);
+        row.append(head);
+      } else {
+        head.append(el('span', { class: 'p2p-step', text: 'ждёт ответный код' }), drop);
+        const ta = el('textarea', { rows: '2', placeholder: '2. Вставьте сюда ответный код от ученика', spellcheck: 'false' });
+        ta.value = p2pDraft.get(s.n) || '';
+        const go = el('button', { class: 'primary-btn', type: 'button', text: 'Соединить' });
+        const submit = async () => {
+          const code = ta.value.trim();
+          if (!code) return;
+          go.disabled = true;
+          const r = await window.P2P.call('host-answer', { code });
+          if (r.error) {
+            p2pErr.set(s.n, P2P_ERRORS[r.error] || P2P_ERRORS.fail);
+            renderP2P();
+          } else {
+            p2pDraft.delete(s.n);
+            p2pErr.delete(s.n);
+          }
+        };
+        ta.oninput = () => {
+          p2pDraft.set(s.n, ta.value);
+          // вставили код целиком — соединяем сразу
+          if (/D1\.[A-Za-z0-9_-]{60,}/.test(ta.value.replace(/\s+/g, ''))) submit();
+        };
+        ta.onkeydown = (e) => e.stopPropagation();
+        go.onclick = submit;
+        const copy = el('button', { class: 'primary-btn', type: 'button', text: '1. Скопировать код для ученика' });
+        copy.onclick = () => copyText(s.code, copy);
+        row.append(head, el('div', { class: 'row' }, copy), ta, el('div', { class: 'row' }, go));
+        if (p2pErr.has(s.n)) row.append(el('p', { class: 'err', text: p2pErr.get(s.n) }));
+      }
+      p2pBox.append(row);
+    }
+    const add = el('button', { class: mine.length ? 'secondary-btn' : 'primary-btn', type: 'button', text: p2pBusy ? 'Готовлю код…' : mine.length ? 'Пригласить ещё одного ученика' : 'Создать код для ученика' });
+    add.disabled = p2pBusy;
+    add.onclick = async () => {
+      p2pBusy = true;
+      p2pFailNote = '';
+      renderP2P();
+      const r = await window.P2P.call('host-offer', { board: WB.boardId, title: WB.title() }, 20000);
+      p2pBusy = false;
+      if (r.error) p2pFailNote = P2P_ERRORS[r.error] || P2P_ERRORS.fail;
+      else copyText(r.code);
+      await loadP2P();
+      renderP2P();
+      if (!r.error) WB.toast('Код скопирован — отправьте его ученику', 3500);
+    };
+    p2pBox.append(el('div', { class: 'row' }, add));
+    if (p2pFailNote) p2pBox.append(el('p', { class: 'err', text: p2pFailNote }));
+  }
+  let p2pFailNote = '';
+  const p2pSeen = new Map(); // n -> последнее известное состояние
+  if (window.P2P) {
+    window.P2P.on((m) => {
+      if (m.ev !== 'state') return;
+      if (WB.remote) return void updateLost(m);
+      // подсказки учителю о смене состояния
+      const now = new Map(m.sessions.map((s) => [s.n, s]));
+      for (const [n, old] of p2pSeen) {
+        const s = now.get(n);
+        if (old.board !== WB.boardId) continue;
+        if (s && s.state === 'connected' && old.state !== 'connected') WB.toast(`Ученик ${s.num} соединён напрямую`, 3500);
+        if (!s && old.state === 'connecting') {
+          p2pFailNote = 'Соединиться не получилось: сеть одного из вас не пропускает прямые соединения, либо код устарел. Попробуйте ещё раз с новым кодом; если VPN включён — выключите его.';
+          WB.toast('Не получилось соединиться с учеником напрямую', 5000);
+        }
+        if (!s && old.state === 'connected') WB.toast(`Ученик ${old.num} отключился`, 3500);
+      }
+      p2pSeen.clear();
+      for (const s of m.sessions) p2pSeen.set(s.n, s);
+      p2p = m;
+      renderP2P();
+    });
+  }
+
+  // ---------- у ученика: полоса «нет связи с учителем» ----------
+  let lostTimer = 0;
+  function updateLost(st) {
+    const bar = $('p2pLost');
+    const ok = st && st.link && st.link.board === WB.boardId && st.link.state === 'connected';
+    clearTimeout(lostTimer);
+    if (ok) {
+      bar.hidden = true;
+      WB.reconnect();
+      return;
+    }
+    const waiting = st && st.link && st.link.board === WB.boardId;
+    $('p2pLostText').textContent = waiting
+      ? 'Жду соединения с учителем: он должен вставить у себя ваш ответный код.'
+      : 'Нет связи с учителем. Попросите у него новый код, чтобы подключиться снова. Рисовать пока можно — изменения отправятся после подключения.';
+    lostTimer = setTimeout(() => (bar.hidden = false), 1500);
+  }
+  if (WB.remote && window.P2P) window.P2P.status().then((st) => updateLost(st.error ? null : st));
+
   $('invite').onclick = async () => {
-    await loadHost();
+    await Promise.all([loadHost(), loadP2P()]);
+    if (p2p) for (const s of p2p.sessions) p2pSeen.set(s.n, s);
     renderInvite();
     WB.showModal('inviteModal');
     const first = $('inviteBody').querySelector('input');

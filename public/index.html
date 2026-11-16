@@ -84,7 +84,26 @@
   .board.new:hover { color: var(--accent); border-color: var(--accent); filter: none; }
   .board.new svg { width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
   .note { color: var(--muted); font-size: 13.5px; margin-top: 18px; line-height: 1.5; }
+  .board .tag { position: absolute; top: 8px; left: 8px; font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 7px; background: var(--accent); color: var(--accent-ink); }
   @media (hover: none) { .board .x { opacity: 1; } }
+  .modal { position: fixed; inset: 0; background: rgba(10,14,20,.45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .modal[hidden] { display: none; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; width: 100%; max-width: 520px; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+  .card h3 { margin: 0 0 6px; font-size: 20px; }
+  .card p { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 6px 0 12px; }
+  .card p.err { color: var(--danger); }
+  .card textarea { width: 100%; font: 12.5px ui-monospace, Consolas, monospace; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--input); color: var(--ink); resize: vertical; min-height: 84px; word-break: break-all; }
+  .card textarea:focus { outline: none; border-color: var(--accent); }
+  .card .btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
+  .card .wait { display: flex; align-items: center; gap: 10px; color: var(--ink); font-size: 14.5px; margin: 14px 0 4px; }
+  .spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .steps { counter-reset: s; list-style: none; padding: 0; margin: 12px 0 0; }
+  .steps li { counter-increment: s; position: relative; padding: 0 0 12px 34px; font-size: 14.5px; line-height: 1.45; }
+  .steps li::before { content: counter(s); position: absolute; left: 0; top: -1px; width: 24px; height: 24px; border-radius: 50%; background: var(--secondary); font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+  .steps li.done::before { content: "✓"; background: var(--accent); color: var(--accent-ink); }
+  button:disabled { opacity: .6; cursor: default; }
 </style>
 </head>
 <body>
@@ -96,6 +115,7 @@
         <input id="link" placeholder="Ссылка на доску" autocomplete="off">
         <button class="secondary" type="submit">Открыть</button>
       </form>
+      <button type="button" id="joinCode" hidden>Войти по коду</button>
     </div>
   </div>
   <div id="status"></div>
@@ -104,6 +124,37 @@
   <div class="grid" id="grid"></div>
   <p class="note" id="note" hidden></p>
 </main>
+<!-- Окно: вход ученика по коду (прямое соединение с компьютером учителя) -->
+<div class="modal" id="codeModal" hidden>
+  <div class="card">
+    <h3>Войти на доску учителя по коду</h3>
+    <div id="codeStep1">
+      <p>Учитель присылает вам код приглашения. Вставьте его сюда.</p>
+      <textarea id="codeIn" placeholder="Код от учителя (начинается с D1.)" spellcheck="false"></textarea>
+      <p class="err" id="codeErr" hidden></p>
+      <div class="btns">
+        <button type="button" class="secondary" data-close>Отмена</button>
+        <button type="button" id="codeNext">Далее</button>
+      </div>
+    </div>
+    <div id="codeStep2" hidden>
+      <ol class="steps">
+        <li class="done">Код учителя принят<span id="codeTitle"></span>.</li>
+        <li><b>Отправьте учителю ответный код</b> — сразу, пока он не устарел (около минуты).
+          <div class="btns" style="justify-content:flex-start;margin-top:8px"><button type="button" id="codeCopy">Скопировать ответный код</button></div>
+        </li>
+        <li>Когда учитель вставит его у себя, доска откроется сама.</li>
+      </ol>
+      <div class="wait"><span class="spinner"></span><span id="codeWait">Жду учителя…</span></div>
+      <p class="err" id="codeErr2" hidden></p>
+      <div class="btns">
+        <button type="button" class="secondary" id="codeAgain">Ввести другой код</button>
+        <button type="button" class="secondary" data-close>Закрыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/js/p2p.js"></script>
 <script>
   const status = document.getElementById('status');
   const grid = document.getElementById('grid');
@@ -182,6 +233,12 @@
         forget(b.id);
         a.remove();
       };
+      if (b.remote) {
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = 'Доска учителя';
+        a.append(tag);
+      }
       a.append(pic, meta, x);
       grid.append(a);
     });
@@ -198,6 +255,10 @@
         hostToken = j.token;
         const byId = new Map(recent.map((x) => [x.id, x]));
         const list = j.boards.map((b) => ({ ...b, onDisk: true, thumb: (byId.get(b.id) || {}).thumb }));
+        // доски учителя, на которые заходили по коду, лежат не на этом компьютере
+        const onDisk = new Set(list.map((b) => b.id));
+        for (const r of recent) if (P2P.isRemote(r.id) && !onDisk.has(r.id)) list.push({ ...r, remote: true });
+        list.sort((x, y) => (y.at || 0) - (x.at || 0));
         document.getElementById('listTitle').textContent = 'Доски на этом компьютере';
         const note = document.getElementById('note');
         note.hidden = false;
@@ -205,6 +266,97 @@
         render(list, true);
       }
     } catch {}
+  })();
+
+  // ---------- вход по коду ----------
+  (async () => {
+    const $ = (id) => document.getElementById(id);
+    const modal = $('codeModal');
+    const JOIN_ERRORS = {
+      badcode: 'Это не похоже на код доски. Скопируйте код учителя целиком.',
+      notoffer: 'Это ответный код, а не приглашение. Нужен код, который прислал учитель.',
+      nobridge: 'Нет связи с модулем соединения. Перезапустите программу.',
+      fail: 'Не получилось обработать код. Попросите учителя создать новый.',
+    };
+    let answer = '';
+    let target = '';
+    let failTimer = 0;
+    function step(n) {
+      $('codeStep1').hidden = n !== 1;
+      $('codeStep2').hidden = n !== 2;
+      $('codeErr').hidden = $('codeErr2').hidden = true;
+      if (n === 1) setTimeout(() => $('codeIn').focus(), 30);
+    }
+    function showErr(id, text) {
+      $(id).textContent = text;
+      $(id).hidden = false;
+    }
+    async function copy(text, btn) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.append(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      if (btn) {
+        const old = btn.textContent;
+        btn.textContent = 'Скопировано ✓';
+        setTimeout(() => (btn.textContent = old), 1600);
+      }
+    }
+    async function join() {
+      const code = $('codeIn').value.trim();
+      if (!code) return;
+      $('codeNext').disabled = true;
+      $('codeNext').textContent = 'Готовлю ответ…';
+      const r = await P2P.call('guest-join', { code }, 20000);
+      $('codeNext').disabled = false;
+      $('codeNext').textContent = 'Далее';
+      if (r.error) return showErr('codeErr', JOIN_ERRORS[r.error] || JOIN_ERRORS.fail);
+      answer = r.code;
+      target = r.board;
+      P2P.markRemote(target);
+      $('codeTitle').textContent = r.title ? ` — доска «${r.title}»` : '';
+      step(2);
+      copy(answer, $('codeCopy'));
+      clearTimeout(failTimer);
+    }
+    $('codeNext').onclick = join;
+    $('codeIn').oninput = () => {
+      // вставили код целиком — сразу идём дальше
+      if (/D1\.[A-Za-z0-9_-]{60,}/.test($('codeIn').value.replace(/\s+/g, ''))) join();
+    };
+    $('codeCopy').onclick = () => copy(answer, $('codeCopy'));
+    $('codeAgain').onclick = () => {
+      $('codeIn').value = '';
+      step(1);
+    };
+    for (const b of modal.querySelectorAll('[data-close]')) b.onclick = () => (modal.hidden = true);
+    $('joinCode').onclick = () => {
+      $('codeIn').value = '';
+      step(1);
+      modal.hidden = false;
+    };
+    P2P.on((m) => {
+      if (m.ev !== 'state') return;
+      if (m.link && m.link.state === 'connected' && target && m.link.board === target && !modal.hidden) {
+        $('codeWait').textContent = 'Соединено! Открываю доску…';
+        location.href = '/b/' + target;
+      } else if (!m.link && m.lastFail && target && m.lastFail.board === target && !$('codeStep2').hidden) {
+        showErr('codeErr2', 'Соединиться не получилось: код устарел или сеть не пропускает прямые соединения. Попросите у учителя новый код и попробуйте ещё раз. Если включён VPN — выключите его.');
+        $('codeWait').textContent = 'Соединение не установлено.';
+      }
+    });
+
+    // кнопка видна, только когда есть модуль соединения (приложение или служебная вкладка)
+    const st = await P2P.status();
+    if (st.error) return;
+    $('joinCode').hidden = false;
+    if (new URLSearchParams(location.search).has('join')) $('joinCode').onclick();
   })();
   window.matchMedia && matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => location.reload());
 </script>
