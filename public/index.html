@@ -18,11 +18,13 @@
   :root {
     --paper: #f7f5ef; --card: #ffffff; --ink: #1d2a3a; --muted: #64707d; --line: #e2ddd1;
     --accent: #2457c5; --accent-ink: #ffffff; --grid: #dfe7f3; --hover: #f2f0ea; --input: #fbfaf7; --secondary: #eef1f6;
+    --thumb: #fffefb; --danger: #c2372b;
     color-scheme: light;
   }
   :root[data-theme="dark"] {
     --paper: #14181e; --card: #1d232c; --ink: #e6ebf2; --muted: #95a1b0; --line: #2d3541;
     --accent: #5b8dff; --accent-ink: #0e1420; --grid: #1f2631; --hover: #262e3a; --input: #161b22; --secondary: #2a323e;
+    --thumb: #171b22; --danger: #ff7a6e;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
@@ -37,65 +39,77 @@
     background-size: 28px 28px;
     min-height: 100vh;
   }
-  main { max-width: 640px; margin: 0 auto; padding: 72px 16px 48px; }
-  h1 { font-size: clamp(30px, 6vw, 44px); line-height: 1.1; margin: 0 0 28px; letter-spacing: -0.02em; }
+  main { max-width: 980px; margin: 0 auto; padding: 56px 16px 48px; }
+  .top { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; margin-bottom: 26px; }
+  h1 { font-size: clamp(30px, 6vw, 44px); line-height: 1.1; margin: 0; letter-spacing: -0.02em; }
   h1 span { color: var(--accent); }
-  .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06);
-    margin-bottom: 16px;
-  }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; flex: 1; justify-content: flex-end; min-width: 280px; }
   button {
     font: inherit; font-weight: 600; border: 0; cursor: pointer; border-radius: 10px;
     padding: 12px 18px; background: var(--accent); color: var(--accent-ink);
   }
   button:hover { filter: brightness(1.07); }
   button.secondary { background: var(--secondary); color: var(--ink); }
-  #create { width: 100%; font-size: 17px; padding: 15px; }
+  form.join { display: flex; gap: 8px; flex: 1; max-width: 420px; min-width: 240px; }
   input {
-    font: inherit; flex: 1; min-width: 200px; padding: 11px 13px; border-radius: 10px;
-    border: 1px solid var(--line); background: var(--input); color: var(--ink);
+    font: inherit; flex: 1; min-width: 0; padding: 11px 13px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
   }
   input:focus { outline: none; border-color: var(--accent); }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
-  ul { list-style: none; padding: 0; margin: 0; }
-  li a {
-    display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 10px;
-    color: var(--ink); text-decoration: none;
-  }
-  li a:hover { background: var(--hover); }
-  li small { color: var(--muted); white-space: nowrap; }
-  #status { color: var(--muted); font-size: 14px; margin-top: 10px; min-height: 20px; }
+  #status { color: var(--muted); font-size: 14px; min-height: 20px; margin: -12px 0 14px; }
   #status:empty { display: none; }
-  #recentCard[hidden] { display: none; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 26px 0 12px; font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; }
+  .board {
+    position: relative; display: block; text-decoration: none; color: var(--ink); background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 6px 18px rgba(0,0,0,.06);
+    transition: transform .22s cubic-bezier(.2,.9,.25,1), box-shadow .22s; animation: rise .4s cubic-bezier(.2,.9,.25,1) both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+  .board:hover { transform: translateY(-4px); box-shadow: 0 2px 6px rgba(0,0,0,.08), 0 16px 34px rgba(0,0,0,.14); }
+  .board .pic { aspect-ratio: 16 / 10; background: var(--thumb) center / cover no-repeat; border-bottom: 1px solid var(--line);
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 22px 22px; }
+  .board .pic.has { background-size: cover; }
+  .board .meta { padding: 10px 12px 11px; }
+  .board b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .board small { color: var(--muted); font-size: 12.5px; }
+  .board .x {
+    position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; padding: 0; border-radius: 8px; font-size: 17px; line-height: 1;
+    background: var(--card); color: var(--muted); border: 1px solid var(--line); opacity: 0; transition: opacity .15s;
+  }
+  .board:hover .x, .board .x:focus { opacity: 1; }
+  .board .x:hover { color: var(--danger); filter: none; }
+  .board.new { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 190px; cursor: pointer;
+    border: 2px dashed var(--line); background: transparent; box-shadow: none; color: var(--muted); font-weight: 600; font-size: 15px; padding: 0; }
+  .board.new:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .board.new svg { width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+  .note { color: var(--muted); font-size: 13.5px; margin-top: 18px; line-height: 1.5; }
+  @media (hover: none) { .board .x { opacity: 1; } }
 </style>
 </head>
 <body>
 <main>
-  <h1>Доска <span>для уроков</span></h1>
-
-  <div class="card">
-    <button id="create">Создать доску</button>
-    <div id="status"></div>
+  <div class="top">
+    <h1>Доска <span>для уроков</span></h1>
+    <div class="actions">
+      <form class="join" id="join">
+        <input id="link" placeholder="Ссылка на доску" autocomplete="off">
+        <button class="secondary" type="submit">Открыть</button>
+      </form>
+    </div>
   </div>
+  <div id="status"></div>
 
-  <div class="card">
-    <h2>Войти по ссылке</h2>
-    <form class="row" id="join">
-      <input id="link" placeholder="Ссылка на доску" autocomplete="off">
-      <button class="secondary" type="submit">Открыть</button>
-    </form>
-  </div>
-
-  <div class="card" id="recentCard" hidden>
-    <h2>Мои доски</h2>
-    <ul id="recent"></ul>
-  </div>
+  <h2 id="listTitle">Мои доски</h2>
+  <div class="grid" id="grid"></div>
+  <p class="note" id="note" hidden></p>
 </main>
 <script>
   const status = document.getElementById('status');
-  document.getElementById('create').onclick = async () => {
+  const grid = document.getElementById('grid');
+  let hostToken = null;
+
+  async function createBoard() {
     status.textContent = 'Создаю… Если сервер спал, это может занять до минуты.';
     try {
       const r = await fetch('/api/boards', { method: 'POST' });
@@ -104,7 +118,7 @@
     } catch {
       status.textContent = 'Не получилось связаться с сервером. Попробуйте ещё раз.';
     }
-  };
+  }
   document.getElementById('join').onsubmit = (e) => {
     e.preventDefault();
     const v = document.getElementById('link').value.trim();
@@ -112,22 +126,86 @@
     if (m) location.href = '/b/' + m[1];
     else status.textContent = 'Не похоже на ссылку на доску.';
   };
-  let recent = [];
-  try { recent = JSON.parse(localStorage.getItem('wb:recent') || '[]'); } catch {}
-  const ul = document.getElementById('recent');
-  if (recent.length) document.getElementById('recentCard').hidden = false;
-  for (const r of recent) {
-    const li = document.createElement('li');
-    const a = document.createElement('a');
-    a.href = '/b/' + r.id;
-    const name = document.createElement('span');
-    name.textContent = r.title || 'Доска ' + r.id;
-    const when = document.createElement('small');
-    when.textContent = new Date(r.at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-    a.append(name, when);
-    li.append(a);
-    ul.append(li);
+
+  function readRecent() {
+    try {
+      const l = JSON.parse(localStorage.getItem('wb:recent') || '[]');
+      return Array.isArray(l) ? l.filter((r) => r && r.id) : [];
+    } catch { return []; }
   }
+  function forget(id) {
+    try {
+      localStorage.setItem('wb:recent', JSON.stringify(readRecent().filter((r) => r.id !== id)));
+      localStorage.removeItem('wb:board:' + id);
+    } catch {}
+  }
+  const fmt = (at) => new Date(at).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  function render(boards, local) {
+    grid.innerHTML = '';
+    const add = document.createElement('button');
+    add.className = 'board new';
+    add.id = 'create';
+    add.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Новая доска</span>';
+    add.onclick = createBoard;
+    grid.append(add);
+    boards.forEach((b, i) => {
+      const a = document.createElement('a');
+      a.className = 'board';
+      a.href = '/b/' + b.id;
+      a.style.animationDelay = Math.min(i, 12) * 35 + 'ms';
+      const pic = document.createElement('div');
+      pic.className = 'pic';
+      if (b.thumb && /^data:image\//.test(b.thumb)) {
+        pic.classList.add('has');
+        pic.style.backgroundImage = `url("${b.thumb}")`;
+      }
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const t = document.createElement('b');
+      t.textContent = b.title || 'Без названия';
+      const s = document.createElement('small');
+      s.textContent = fmt(b.at);
+      meta.append(t, s);
+      const x = document.createElement('button');
+      x.className = 'x';
+      x.type = 'button';
+      x.textContent = '×';
+      x.title = local && b.onDisk ? 'Удалить доску с компьютера' : 'Убрать из списка';
+      x.onclick = async (e) => {
+        e.preventDefault();
+        if (local && b.onDisk) {
+          if (!confirm(`Удалить доску «${b.title || 'Без названия'}» с этого компьютера? Отменить это нельзя.`)) return;
+          const r = await fetch('/api/boards/' + b.id, { method: 'DELETE', headers: { 'x-host-token': hostToken } });
+          if (r.status === 409) return alert('Доска сейчас открыта у кого-то из участников. Закройте её и попробуйте снова.');
+        }
+        forget(b.id);
+        a.remove();
+      };
+      a.append(pic, meta, x);
+      grid.append(a);
+    });
+  }
+
+  (async () => {
+    const recent = readRecent();
+    render(recent, false);
+    // Если доска запущена на этом компьютере — показываем всё, что лежит на диске
+    try {
+      const r = await fetch('/api/boards', { cache: 'no-store' });
+      const j = await r.json();
+      if (j.local) {
+        hostToken = j.token;
+        const byId = new Map(recent.map((x) => [x.id, x]));
+        const list = j.boards.map((b) => ({ ...b, onDisk: true, thumb: (byId.get(b.id) || {}).thumb }));
+        document.getElementById('listTitle').textContent = 'Доски на этом компьютере';
+        const note = document.getElementById('note');
+        note.hidden = false;
+        note.textContent = 'Доски хранятся на этом компьютере и доступны другим, пока программа запущена. Чтобы позвать учеников, откройте доску и нажмите «Пригласить».';
+        render(list, true);
+      }
+    } catch {}
+  })();
   window.matchMedia && matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => location.reload());
 </script>
 </body>

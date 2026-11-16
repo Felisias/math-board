@@ -15,6 +15,7 @@
   const MAX_ZOOM = 8;
   const SHAPES = ['line', 'arrow', 'rect', 'ellipse', 'triangle'];
   const BGS = ['blank', 'grid', 'dots', 'lines', 'coord'];
+  const CURVE_TOOLS = ['curve', 'poly'];
 
   const boardId = location.pathname.split('/').filter(Boolean).pop();
   const clientId = uid(12); // id этой вкладки — сохраняется при переподключении
@@ -185,12 +186,18 @@
   let H = 0;
   let DPR = 1;
 
+  // настройки инструментов запоминаются между заходами
+  const prefs = store.get('wb:prefs', {}) || {};
+  const isHex = (c) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c);
   let tool = 'pen';
-  let color = PALETTE[0];
-  let markerColor = '#f5c800';
-  let widthIdx = 1;
-  let fillOn = false;
-  let snapOn = false;
+  let color = isHex(prefs.color) ? prefs.color : PALETTE[0];
+  let markerColor = isHex(prefs.markerColor) ? prefs.markerColor : '#f5c800';
+  let widthIdx = [0, 1, 2].includes(prefs.widthIdx) ? prefs.widthIdx : 1;
+  let fillOn = !!prefs.fillOn;
+  let snapOn = !!prefs.snapOn;
+  let dashOn = false;
+  let labelOn = !!prefs.labelOn;
+  const savePrefs = () => store.set('wb:prefs', { color, markerColor, widthIdx, fillOn, snapOn, labelOn });
 
   let me = store.get('wb:me', null);
   if (!me || typeof me !== 'object') me = { name: '', color: USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)] };
@@ -212,6 +219,12 @@
   let hoverPt = null;
   let spaceDown = false;
   let penSeen = false;
+  let following = null; // участник, за экраном которого я слежу
+  const views = new Map(); // что сейчас видят другие участники
+  let camAnimId = 0;
+  let clip = null; // скопированные объекты
+  const hooks = {};
+  const emit = (name, arg) => (hooks[name] || []).forEach((f) => f(arg));
 
   const page = () => (board ? board.pages.find((p) => p.id === pageId) : null);
   const pageById = (id) => (board ? board.pages.find((p) => p.id === id) : null);
@@ -235,6 +248,7 @@
   const isMobile = () => window.innerWidth <= 760;
 
   function zoomAt(sx, sy, factor) {
+    camAnimId++;
     const w = toWorld(sx, sy);
     cam.s = clamp(cam.s * factor, MIN_ZOOM, MAX_ZOOM);
     cam.x = w.x - sx / cam.s;
@@ -245,11 +259,48 @@
     if (pg && pg.bg === 'coord') return { x: -W / 2, y: -H / 2, s: 1 };
     return isMobile() ? { x: -20, y: -70, s: 1 } : { x: -140, y: -80, s: 1 };
   }
-  function centerOn(wx, wy, s = cam.s) {
-    cam.s = clamp(s, MIN_ZOOM, MAX_ZOOM);
-    cam.x = wx - W / 2 / cam.s;
-    cam.y = wy - H / 2 / cam.s;
+  function centerOn(wx, wy, s = cam.s, animate = false) {
+    s = clamp(s, MIN_ZOOM, MAX_ZOOM);
+    const to = { x: wx - W / 2 / s, y: wy - H / 2 / s, s };
+    if (animate) return animateCam(to);
+    camAnimId++;
+    cam = to;
     requestRender();
+  }
+  // плавный переход камеры: центр двигается линейно, масштаб — в логарифмической шкале
+  function animateCam(to, ms = 260) {
+    const from = { ...cam };
+    const id = ++camAnimId;
+    const t0 = now();
+    const fcx = from.x + W / 2 / from.s, fcy = from.y + H / 2 / from.s;
+    const tcx = to.x + W / 2 / to.s, tcy = to.y + H / 2 / to.s;
+    const step = () => {
+      if (id !== camAnimId) return;
+      const k = Math.min(1, (now() - t0) / ms);
+      const e = 1 - Math.pow(1 - k, 3);
+      const s = from.s * Math.pow(to.s / from.s, e);
+      cam = { x: fcx + (tcx - fcx) * e - W / 2 / s, y: fcy + (tcy - fcy) * e - H / 2 / s, s };
+      requestRender();
+      if (k < 1) requestAnimationFrame(step);
+    };
+    step();
+  }
+  function zoomBy(factor) {
+    userMovedCam();
+    centerOn(cam.x + W / 2 / cam.s, cam.y + H / 2 / cam.s, cam.s * factor, true);
+  }
+  function zoomFit() {
+    userMovedCam();
+    const pg = page();
+    const b = pg && contentBounds(pg);
+    if (!b) return animateCam(defaultCam(pg));
+    const side = isMobile() ? 30 : 240;
+    const s = clamp(Math.min((W - side) / b.w, (H - 180) / b.h), MIN_ZOOM, 2);
+    centerOn(b.x + b.w / 2 - (isMobile() ? 0 : 50 / s), b.y + b.h / 2, s, true);
+  }
+  function userMovedCam() {
+    camAnimId++;
+    if (following) stopFollow();
   }
 
   function resize() {
@@ -277,7 +328,7 @@
   let everReady = false;
   let retry = 0;
   const outbox = [];
-  const PERSISTENT = new Set(['add', 'update', 'remove', 'set', 'page-add', 'page-remove', 'page-bg', 'title', 'nb-add', 'nb-update', 'nb-remove']);
+  const PERSISTENT = new Set(['add', 'update', 'remove', 'set', 'order', 'page-add', 'page-remove', 'page-bg', 'title', 'nb-add', 'nb-update', 'nb-remove']);
 
   function setConn(state) {
     const el = $('conn');
@@ -367,6 +418,7 @@
         scheduleBackup();
         if (nbView) refreshNotebooks();
         requestRender();
+        emit('init', m);
         return;
       }
       case 'users':
@@ -374,8 +426,14 @@
       case 'leave':
         cursors.delete(m.uid);
         lasers.delete(m.uid);
+        views.delete(m.uid);
+        if (following === m.uid) stopFollow();
         setUsers(users.filter((u) => u.id !== m.uid));
         return requestRender();
+      case 'view':
+        views.set(m.uid, m);
+        if (following === m.uid) applyFollow(m);
+        return;
       case 'rtc':
         return voice.signal(m);
       case 'title':
@@ -412,7 +470,8 @@
         if (!pageById(m.page)) return;
         if (nbView) closeNotebooks(true);
         if (m.page !== pageId) goToPage(m.page);
-        centerOn(m.cx, m.cy, m.s);
+        if (following) stopFollow();
+        centerOn(m.cx, m.cy, m.s, true);
         const u = users.find((x) => x.id === m.uid);
         toast((u ? u.name : 'Участник') + ' показывает вам свою часть доски');
         return;
@@ -426,7 +485,7 @@
           scheduleBackup();
           if (nbView && /^(nb-|page-)/.test(m.t)) refreshNotebooks();
           requestRender();
-        }
+        } else emit('msg:' + m.t, m);
     }
   }
 
@@ -450,6 +509,9 @@
         break;
       case 'set':
         if (pg) pg.objects = m.objects;
+        break;
+      case 'order':
+        if (pg) applyOrder(pg, m.ids);
         break;
       case 'page-add':
         if (!pageById(m.pageData.id)) {
@@ -506,6 +568,13 @@
   function replaceObj(pg, obj) {
     const i = pg.objects.findIndex((o) => o.id === obj.id);
     if (i >= 0) pg.objects[i] = obj;
+  }
+  function applyOrder(pg, ids) {
+    const pos = new Map(ids.map((id, i) => [id, i]));
+    pg.objects = pg.objects
+      .map((o, i) => ({ o, k: pos.has(o.id) ? pos.get(o.id) : 1e9 + i }))
+      .sort((a, b) => a.k - b.k)
+      .map((x) => x.o);
   }
 
   // ================== Действия с отменой ==================
@@ -585,6 +654,17 @@
     opSet(pageId, after);
     pushUndo({ kind: 'set', page: pageId, before, after });
   }
+  function opOrder(pgId, ids) {
+    const pg = pageById(pgId);
+    if (!pg) return;
+    applyOrder(pg, ids);
+    send({ t: 'order', page: pgId, ids });
+    afterLocalChange(pgId);
+  }
+  function doOrder(before, after) {
+    opOrder(pageId, after);
+    pushUndo({ kind: 'order', page: pageId, before, after });
+  }
 
   function revert(e) {
     switch (e.kind) {
@@ -599,6 +679,9 @@
         break;
       case 'set':
         opSet(e.page, e.before);
+        break;
+      case 'order':
+        opOrder(e.page, e.before);
         break;
     }
   }
@@ -615,6 +698,9 @@
         break;
       case 'set':
         opSet(e.page, e.after);
+        break;
+      case 'order':
+        opOrder(e.page, e.after);
         break;
     }
   }
@@ -688,6 +774,12 @@
   function curvePoly(o) {
     let poly = curvePolyCache.get(o);
     if (poly) return poly;
+    if (o.line) {
+      poly = o.pts.slice();
+      if (o.closed) poly.push(poly[0], poly[1]);
+      curvePolyCache.set(o, poly);
+      return poly;
+    }
     poly = [];
     for (const [a, b, c, d] of curveBeziers(o.pts, o.closed)) {
       for (let i = poly.length ? 1 : 0; i <= 14; i++) {
@@ -904,11 +996,12 @@
     const pg = page();
     if (!pg) return null;
     const tol = 6 / cam.s;
-    const objs = objectsForRender(pg);
+    const objs = objectsForRender(pg).filter((o) => !o.lock); // закреплённые не выбираются
     for (let i = objs.length - 1; i >= 0; i--) if (objs[i].type !== 'plot' && hitTest(objs[i], wp.x, wp.y, tol)) return objs[i];
     for (let i = objs.length - 1; i >= 0; i--) {
       const o = objs[i];
-      if (o.type === 'shape' && o.shape !== 'line' && o.shape !== 'arrow' && inRect(wp, bounds(o))) return o;
+      const closed = (o.type === 'shape' && o.shape !== 'line' && o.shape !== 'arrow') || (o.type === 'curve' && o.closed);
+      if (closed && inRect(wp, bounds(o))) return o;
     }
     // координатная плоскость — в последнюю очередь, чтобы можно было выбрать то, что нарисовано на ней
     for (let i = objs.length - 1; i >= 0; i--) if (objs[i].type === 'plot' && inRect(wp, objs[i])) return objs[i];
@@ -1215,7 +1308,18 @@
     c.restore();
   }
 
+  function setDash(c, w) {
+    c.setLineDash([w * 3.2, w * 2.6]);
+    c.lineCap = 'butt';
+  }
   function traceCurve(c, o) {
+    if (o.line) {
+      if (o.pts.length < 4) return false;
+      c.moveTo(o.pts[0], o.pts[1]);
+      for (let i = 2; i < o.pts.length; i += 2) c.lineTo(o.pts[i], o.pts[i + 1]);
+      if (o.closed) c.closePath();
+      return true;
+    }
     const segs = curveBeziers(o.pts, o.closed);
     if (!segs.length) return false;
     c.moveTo(segs[0][0][0], segs[0][0][1]);
@@ -1229,6 +1333,7 @@
     c.lineWidth = o.w;
     c.lineCap = 'round';
     c.lineJoin = 'round';
+    if (o.dash) setDash(c, o.w);
     c.beginPath();
     if (traceCurve(c, o)) {
       if (o.fill && o.closed) {
@@ -1249,6 +1354,16 @@
     c.arc(o.x, o.y, o.r, 0, Math.PI * 2);
     c.stroke();
     c.fill();
+    if (o.label) {
+      const fs = o.r * 3.6;
+      c.font = `italic ${fs}px ${FONT}`;
+      c.textAlign = 'left';
+      c.textBaseline = 'bottom';
+      c.lineJoin = 'round';
+      c.lineWidth = fs * 0.3;
+      c.strokeText(o.label, o.x + o.r * 1.3, o.y - o.r * 0.9);
+      c.fillText(o.label, o.x + o.r * 1.3, o.y - o.r * 0.9);
+    }
     c.restore();
   }
 
@@ -1260,6 +1375,7 @@
     c.lineWidth = o.w;
     c.lineCap = 'round';
     c.lineJoin = 'round';
+    if (o.dash) setDash(c, o.w);
     c.beginPath();
     switch (o.shape) {
       case 'line':
@@ -1481,6 +1597,8 @@
     drawCursors(pg.id);
     drawEraserRing();
     if (textState) positionTextEditor();
+    positionSelBar();
+    broadcastView();
     $('zoomLabel').textContent = Math.round(cam.s * 100) + '%';
   }
 
@@ -1511,10 +1629,54 @@
     ctx.restore();
   }
 
-  function handleRect(b) {
-    if (!b) return null;
-    const p = toScreen(b.x + b.w, b.y + b.h);
-    return { x: p.x + 4 - 6, y: p.y + 4 - 6, w: 12, h: 12 };
+  // ----- маркеры выделения -----
+  function singleSelected() {
+    if (selected.size !== 1) return null;
+    const pg = page();
+    const id = selected.values().next().value;
+    const o = pg && pg.objects.find((x) => x.id === id);
+    return o ? drafts.get(o.id) || o : null;
+  }
+  function getHandles() {
+    if (tool !== 'select' || !selected.size) return [];
+    const o = singleSelected();
+    const H = [];
+    const S = toScreen;
+    if (o && o.type === 'shape' && (o.shape === 'line' || o.shape === 'arrow')) {
+      // у отрезка двигаются концы
+      H.push({ kind: 'end', n: 1, round: 1, ...S(o.x1, o.y1) }, { kind: 'end', n: 2, round: 1, ...S(o.x2, o.y2) });
+    } else if (o && o.type === 'shape') {
+      // у фигуры каждый угол тянется свободно
+      for (const ix of [1, 2]) for (const iy of [1, 2]) H.push({ kind: 'box', ix, iy, ...S(o['x' + ix], o['y' + iy]) });
+    } else if (o && o.type === 'curve') {
+      // у кривой двигаются её точки
+      for (let i = 0; i < o.pts.length; i += 2) H.push({ kind: 'cp', i, round: 1, ...S(o.pts[i], o.pts[i + 1]) });
+    } else if (o && o.type === 'plot') {
+      for (const cx of [0, 1]) for (const cy of [0, 1]) H.push({ kind: 'plot', cx, cy, ...S(o.x + cx * o.w, o.y + cy * o.h) });
+    } else {
+      // остальное масштабируется пропорционально за любой угол
+      const b = selectionBounds();
+      if (b) {
+        for (const cx of [0, 1]) {
+          for (const cy of [0, 1]) {
+            const p = S(b.x + cx * b.w, b.y + cy * b.h);
+            H.push({ kind: 'scale', cx, cy, x: p.x + (cx ? 4 : -4), y: p.y + (cy ? 4 : -4) });
+          }
+        }
+      }
+    }
+    return H;
+  }
+  function handleAt(sp) {
+    let best = null, bd = 10;
+    for (const h of getHandles()) {
+      const d = Math.hypot(h.x - sp.x, h.y - sp.y);
+      if (d < bd) {
+        bd = d;
+        best = h;
+      }
+    }
+    return best;
   }
 
   function drawSelection() {
@@ -1534,16 +1696,22 @@
       }
     }
     const b = selectionBounds();
-    if (b) {
+    const one = singleSelected();
+    const bare = one && (one.type === 'curve' || (one.type === 'shape' && (one.shape === 'line' || one.shape === 'arrow')));
+    if (b && !bare) {
       const p = toScreen(b.x, b.y);
       ctx.setLineDash([5, 4]);
       ctx.strokeRect(Math.round(p.x - 4) + 0.5, Math.round(p.y - 4) + 0.5, Math.round(b.w * cam.s + 8), Math.round(b.h * cam.s + 8));
       ctx.setLineDash([]);
-      const hr = handleRect(b);
-      ctx.fillStyle = P.paper;
-      ctx.lineWidth = 1.5;
-      ctx.fillRect(hr.x, hr.y, hr.w, hr.h);
-      ctx.strokeRect(hr.x, hr.y, hr.w, hr.h);
+    }
+    ctx.fillStyle = P.paper;
+    ctx.lineWidth = 1.5;
+    for (const h of getHandles()) {
+      ctx.beginPath();
+      if (h.round) ctx.arc(h.x, h.y, 5, 0, Math.PI * 2);
+      else ctx.rect(Math.round(h.x) - 5, Math.round(h.y) - 5, 10, 10);
+      ctx.fill();
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -1801,6 +1969,7 @@
     const wp = toWorld(sp.x, sp.y);
     const panTouch = e.pointerType === 'touch' && penSeen;
     if (e.button === 1 || e.button === 2 || spaceDown || tool === 'hand' || panTouch) {
+      userMovedCam();
       action = { kind: 'pan', sx: sp.x, sy: sp.y, cx: cam.x, cy: cam.y };
       canvas.style.cursor = 'grabbing';
       return;
@@ -1838,10 +2007,16 @@
       }
       case 'point': {
         const p = magnet(wp, true);
-        doAdd([{ id: uid(), type: 'point', x: r1(p.x), y: r1(p.y), r: r2(Math.max(3, WIDTHS[widthIdx] + 2.5) / cam.s), color }]);
+        const pt = { id: uid(), type: 'point', x: r1(p.x), y: r1(p.y), r: r2(Math.max(3, WIDTHS[widthIdx] + 2.5) / cam.s), color };
+        if (labelOn) {
+          const lb = nextLabel();
+          if (lb) pt.label = lb;
+        }
+        doAdd([pt]);
         break;
       }
       case 'curve':
+      case 'poly':
         curveClick(wp);
         break;
       case 'plot':
@@ -1903,8 +2078,8 @@
         return requestRender();
       case 'move':
         return moveSelection(wp);
-      case 'resize':
-        return resizeSelection(wp);
+      case 'handle':
+        return dragHandle(wp, e.shiftKey);
       case 'box':
         action.x1 = wp.x;
         action.y1 = wp.y;
@@ -1940,7 +2115,7 @@
         finishPlot(a);
         break;
       case 'move':
-      case 'resize':
+      case 'handle':
         finishDrag(a);
         break;
       case 'box':
@@ -1963,13 +2138,15 @@
       send({ t: 'live-end', id: current.id });
       current = null;
     }
-    if (action.kind === 'move' || action.kind === 'resize') drafts.clear();
+    if (action.kind === 'move' || action.kind === 'handle') drafts.clear();
+    clearTimeout(holdTimer);
     action = null;
     requestRender();
   }
 
   // ----- масштаб двумя пальцами -----
   function startPinch() {
+    userMovedCam();
     const [a, b] = [...pointers.values()].filter((p) => p.type === 'touch');
     action = {
       kind: 'pinch',
@@ -1997,6 +2174,7 @@
     'wheel',
     (e) => {
       e.preventDefault();
+      userMovedCam();
       if (e.ctrlKey || e.metaKey) zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.01));
       else {
         const k = e.deltaMode === 1 ? 20 : 1;
@@ -2018,12 +2196,18 @@
     if (marker) current.marker = 1;
     action = { kind: 'stroke', sent: 0 };
     flushLiveStroke(true);
+    holdAt = wp;
+    armHold();
   }
   function addStrokePoint(wp) {
     const p = current.pts;
     const lx = p[p.length - 2], ly = p[p.length - 1];
     if (Math.hypot(wp.x - lx, wp.y - ly) < 1.2 / cam.s) return;
     p.push(r1(wp.x), r1(wp.y));
+    if (Math.hypot(wp.x - holdAt.x, wp.y - holdAt.y) * cam.s > 5) {
+      holdAt = wp;
+      armHold();
+    }
   }
   function flushLiveStroke(force) {
     const t = now();
@@ -2039,6 +2223,7 @@
     action.sent = p.length;
   }
   function finishStroke() {
+    clearTimeout(holdTimer);
     if (!current) return;
     const obj = current;
     current = null;
@@ -2053,9 +2238,11 @@
       x1: r1(p.x), y1: r1(p.y), x2: r1(p.x), y2: r1(p.y),
     };
     if (fillOn && ['rect', 'ellipse', 'triangle'].includes(tool)) current.fill = 1;
+    if (dashOn) current.dash = 1;
     action = { kind: 'shape' };
   }
   function moveShape(wp, shift) {
+    if (action.fixed) return;
     const p = snap(wp);
     let dx = p.x - current.x1, dy = p.y - current.y1;
     if (shift) {
@@ -2086,7 +2273,7 @@
     if (!current) return;
     const o = current;
     current = null;
-    if (Math.hypot(o.x2 - o.x1, o.y2 - o.y1) * cam.s < 4) {
+    if (o.type === 'shape' && Math.hypot(o.x2 - o.x1, o.y2 - o.y1) * cam.s < 4) {
       send({ t: 'live-end', id: o.id });
       return;
     }
@@ -2157,7 +2344,9 @@
     lastCurveClick = { t, x: sp.x, y: sp.y };
     if (!curveDraft) {
       curveDraft = { id: uid(), type: 'curve', color, w: r2(WIDTHS[widthIdx] / cam.s), pts: [r1(p.x), r1(p.y)] };
+      if (tool === 'poly') curveDraft.line = 1;
       if (fillOn) curveDraft.fill = 1;
+      if (dashOn) curveDraft.dash = 1;
       return;
     }
     const pts = curveDraft.pts;
@@ -2194,7 +2383,7 @@
     const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (r / 2)));
     const hits = [];
     for (const o of pg.objects) {
-      if (o.type === 'image' || o.type === 'plot') continue; // их удаляют через выделение
+      if (o.type === 'image' || o.type === 'plot' || o.lock) continue; // их удаляют через выделение
       for (let k = 0; k <= n; k++) {
         if (hitTest(o, a.x + ((b.x - a.x) * k) / n, a.y + ((b.y - a.y) * k) / n, r)) {
           hits.push(o.id);
@@ -2218,13 +2407,10 @@
 
   // ----- выделение, перемещение, масштаб -----
   function selectDown(wp, sp, e) {
-    if (selected.size) {
-      const b = selectionBounds();
-      const hr = handleRect(b);
-      if (hr && sp.x >= hr.x - 4 && sp.x <= hr.x + hr.w + 4 && sp.y >= hr.y - 4 && sp.y <= hr.y + hr.h + 4) {
-        action = { kind: 'resize', b, orig: originals() };
-        return;
-      }
+    const h = handleAt(sp);
+    if (h) {
+      action = { kind: 'handle', h, b: selectionBounds(), orig: originals() };
+      return;
     }
     const hit = pickObject(wp);
     if (hit) {
@@ -2234,6 +2420,13 @@
       } else if (!selected.has(hit.id)) {
         selected.clear();
         selected.add(hit.id);
+      }
+      if (e.altKey && selected.size) {
+        // Alt + перетаскивание — тянем копию
+        const copies = cloneForPaste(selectionWithGraphs(), 0, 0);
+        doAdd(copies);
+        selected.clear();
+        copies.forEach((o) => o.type !== 'graph' && selected.add(o.id));
       }
       action = { kind: 'move', start: wp, orig: originals() };
     } else {
@@ -2261,11 +2454,48 @@
     sendDrafts(false);
     requestRender();
   }
-  function resizeSelection(wp) {
-    const b = action.b;
-    if (!b || b.w < 1 || b.h < 1) return;
-    const k = clamp(Math.max((wp.x - b.x) / b.w, (wp.y - b.y) / b.h), 0.05, 50);
-    for (const o of action.orig) drafts.set(o.id, transformObj(o, (x) => b.x + (x - b.x) * k, (y) => b.y + (y - b.y) * k, k));
+  function dragHandle(wp, shift) {
+    const { h, b } = action;
+    const o = action.orig[0];
+    if (!o) return;
+    let next = null;
+    if (h.kind === 'scale') {
+      if (!b) return;
+      const ax = b.x + (1 - h.cx) * b.w, ay = b.y + (1 - h.cy) * b.h; // противоположный угол остаётся на месте
+      const kx = b.w > 1 ? Math.abs(wp.x - ax) / b.w : 0;
+      const ky = b.h > 1 ? Math.abs(wp.y - ay) / b.h : 0;
+      const k = clamp(Math.max(kx, ky), 0.05, 50);
+      for (const q of action.orig) drafts.set(q.id, transformObj(q, (x) => ax + (x - ax) * k, (y) => ay + (y - ay) * k, k));
+    } else if (h.kind === 'end') {
+      let p = magnet(wp, false);
+      if (shift) {
+        const ox = o['x' + (3 - h.n)], oy = o['y' + (3 - h.n)];
+        const step = Math.PI / 12;
+        const ang = Math.round(Math.atan2(p.y - oy, p.x - ox) / step) * step;
+        const len = Math.hypot(p.x - ox, p.y - oy);
+        p = { x: ox + len * Math.cos(ang), y: oy + len * Math.sin(ang) };
+      }
+      next = { ...o, ['x' + h.n]: r1(p.x), ['y' + h.n]: r1(p.y) };
+    } else if (h.kind === 'box') {
+      const p = snap(wp);
+      next = { ...o, ['x' + h.ix]: r1(p.x), ['y' + h.iy]: r1(p.y) };
+    } else if (h.kind === 'cp') {
+      const p = magnet(wp, false);
+      const pts = o.pts.slice();
+      pts[h.i] = r1(p.x);
+      pts[h.i + 1] = r1(p.y);
+      next = { ...o, pts };
+    } else if (h.kind === 'plot') {
+      // плоскость растёт по клеткам, начало координат остаётся на месте
+      const c = o.cell;
+      const fx = o.x + (1 - h.cx) * o.w, fy = o.y + (1 - h.cy) * o.h;
+      let nx = o.ox + Math.round((wp.x - o.ox) / c) * c, ny = o.oy + Math.round((wp.y - o.oy) / c) * c;
+      nx = h.cx ? Math.max(nx, fx + 2 * c) : Math.min(nx, fx - 2 * c);
+      ny = h.cy ? Math.max(ny, fy + 2 * c) : Math.min(ny, fy - 2 * c);
+      const x = Math.min(fx, nx), y = Math.min(fy, ny), w = Math.abs(nx - fx), hh = Math.abs(ny - fy);
+      next = { ...o, x: r1(x), y: r1(y), w: r1(w), h: r1(hh), ox: clamp(o.ox, x, x + w), oy: clamp(o.oy, y, y + hh) };
+    }
+    if (next) drafts.set(o.id, next);
     sendDrafts(false);
     requestRender();
   }
@@ -2281,7 +2511,7 @@
     if (box.w * cam.s < 3 && box.h * cam.s < 3) return;
     for (const o of page().objects) {
       const b = bounds(o);
-      if (!b) continue;
+      if (!b || o.lock) continue;
       // плоскость выделяется, только если рамка охватывает её целиком
       if (o.type === 'plot') {
         if (b.x >= box.x && b.y >= box.y && b.x + b.w <= box.x + box.w && b.y + b.h <= box.y + box.h) selected.add(o.id);
@@ -2294,11 +2524,315 @@
     const wp = toWorld(e.clientX, e.clientY);
     const hit = pickObject(wp);
     if (!hit) return startText(wp);
-    if (hit.type === 'text') startText(null, hit);
-    else if (hit.type === 'math') openMathModal({ edit: hit });
-    else if (hit.type === 'graph') openGraphModal({ edit: hit });
-    else if (hit.type === 'plot') openGraphModal({ plot: hit });
+    editObject(hit);
   });
+  function editObject(o) {
+    if (o.type === 'text') startText(null, o);
+    else if (o.type === 'math') openMathModal({ edit: o });
+    else if (o.type === 'graph') openGraphModal({ edit: o });
+    else if (o.type === 'plot') openGraphModal({ plot: o });
+    else if (o.type === 'point') editPointLabel(o);
+  }
+
+  // ================== Панель выделенного объекта ==================
+  const selBar = $('selBar');
+  function positionSelBar() {
+    const show = tool === 'select' && selected.size > 0 && !action && !textState && !nbView;
+    if (!show) {
+      if (!selBar.hidden) selBar.hidden = true;
+      return;
+    }
+    const o = singleSelected();
+    selBar.querySelector('[data-sel=edit]').hidden = !(o && ['text', 'math', 'plot', 'graph', 'point'].includes(o.type));
+    selBar.hidden = false;
+    const b = selectionBounds();
+    const bw = selBar.offsetWidth, bh = selBar.offsetHeight;
+    let x = W / 2 - bw / 2, y = 70;
+    if (b) {
+      x = toScreen(b.x + b.w / 2, 0).x - bw / 2;
+      y = toScreen(0, b.y).y - bh - 20;
+      if (y < 68) y = toScreen(0, b.y + b.h).y + 20;
+      if (y > H - bh - 66) y = 68;
+    }
+    x = clamp(x, isMobile() ? 6 : 116, Math.max(6, W - bw - 8));
+    selBar.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  }
+  function patchSelected(fn) {
+    const before = [], after = [];
+    for (const o of originals()) {
+      const n = fn(o);
+      if (n && n !== o) {
+        before.push(o);
+        after.push(n);
+      }
+    }
+    if (before.length) doUpdate(before, after);
+    return before.length;
+  }
+  function scaleStyle(k) {
+    patchSelected((o) => {
+      if (['stroke', 'shape', 'curve', 'graph'].includes(o.type)) return { ...o, w: r2(clamp(o.w * k, 0.3, 90)) };
+      if (o.type === 'text' || o.type === 'math') return { ...o, size: r2(clamp(o.size * k, 4, 600)) };
+      if (o.type === 'point') return { ...o, r: r2(clamp(o.r * k, 1, 60)) };
+      return null;
+    });
+  }
+  function toggleProp(prop, ok) {
+    const targets = originals().filter(ok);
+    if (!targets.length) return toast('К выделенному это не применяется', 1600);
+    const allOn = targets.every((o) => o[prop]);
+    patchSelected((o) => {
+      if (!ok(o)) return null;
+      const n = { ...o };
+      if (allOn) delete n[prop];
+      else n[prop] = 1;
+      return n;
+    });
+  }
+  function reorder(front) {
+    const pg = page();
+    const before = pg.objects.map((o) => o.id);
+    const sel = before.filter((id) => selected.has(id));
+    const rest = before.filter((id) => !selected.has(id));
+    const after = front ? [...rest, ...sel] : [...sel, ...rest];
+    if (after.join() !== before.join()) doOrder(before, after);
+  }
+  function lockSelected() {
+    if (!patchSelected((o) => (o.type === 'graph' ? null : { ...o, lock: 1 }))) return;
+    selected.clear();
+    toast('Закреплено. Открепить можно в меню «⋯»', 2600);
+    requestRender();
+  }
+  function unlockAll() {
+    const before = page().objects.filter((o) => o.lock);
+    if (!before.length) return toast('На этой странице нет закреплённых объектов', 2000);
+    doUpdate(before, before.map((o) => {
+      const n = { ...o };
+      delete n.lock;
+      return n;
+    }));
+    toast('Всё на странице снова можно двигать', 2000);
+  }
+  selBar.addEventListener('pointerdown', (e) => e.stopPropagation());
+  selBar.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-sel]');
+    if (!btn) return;
+    const one = singleSelected();
+    switch (btn.dataset.sel) {
+      case 'edit':
+        if (one) editObject(one);
+        break;
+      case 'thin':
+        scaleStyle(0.8);
+        break;
+      case 'thick':
+        scaleStyle(1.25);
+        break;
+      case 'dash':
+        toggleProp('dash', (o) => o.type === 'curve' || o.type === 'shape');
+        break;
+      case 'fill':
+        toggleProp('fill', (o) => (o.type === 'shape' && o.shape !== 'line' && o.shape !== 'arrow') || (o.type === 'curve' && o.closed));
+        break;
+      case 'front':
+        reorder(true);
+        break;
+      case 'back':
+        reorder(false);
+        break;
+      case 'lock':
+        lockSelected();
+        break;
+      case 'dup':
+        duplicateSelection();
+        break;
+      case 'del':
+        doRemove([...selected]);
+        break;
+    }
+  });
+
+  // ================== Копирование и вставка ==================
+  function selectionWithGraphs() {
+    const pg = page();
+    const objs = originals();
+    const plots = new Set(objs.filter((o) => o.type === 'plot').map((o) => o.id));
+    for (const g of pg.objects) if (g.type === 'graph' && plots.has(g.plot) && !selected.has(g.id)) objs.push(g);
+    return objs;
+  }
+  function cloneForPaste(objs, dx, dy) {
+    const idMap = new Map();
+    const out = [];
+    for (const o of objs) {
+      if (o.type === 'graph') continue;
+      const c = { ...transformObj(o, (x) => x + dx, (y) => y + dy, 1), id: uid() };
+      delete c.lock;
+      idMap.set(o.id, c.id);
+      out.push(c);
+    }
+    for (const o of objs) {
+      if (o.type !== 'graph') continue;
+      const c = { ...o, id: uid() };
+      if (o.plot) {
+        if (idMap.has(o.plot)) c.plot = idMap.get(o.plot);
+        else if (!page().objects.some((x) => x.id === o.plot)) continue;
+      }
+      out.push(c);
+    }
+    return out;
+  }
+  function copySelection() {
+    const objs = selectionWithGraphs();
+    if (!objs.length) return false;
+    clip = { objs: JSON.parse(JSON.stringify(objs)) };
+    store.set('wb:clip', clip); // чтобы вставлять и на других досках
+    return true;
+  }
+  function pasteClip() {
+    const c = clip || store.get('wb:clip', null);
+    if (!c || !Array.isArray(c.objs) || !c.objs.length) return false;
+    let b = null;
+    for (const o of c.objs) b = unionRect(b, o.type === 'math' ? estimateMath(o) : bounds(o));
+    const target = hoverPt ? toWorld(hoverPt.x, hoverPt.y) : toWorld(W / 2, H / 2);
+    let dx = b ? target.x - (b.x + b.w / 2) : 0, dy = b ? target.y - (b.y + b.h / 2) : 0;
+    if (snapOn || c.objs.some((o) => o.type === 'plot')) {
+      dx = Math.round(dx / G) * G;
+      dy = Math.round(dy / G) * G;
+    }
+    const copies = cloneForPaste(c.objs, dx, dy);
+    if (!copies.length) return false;
+    doAdd(copies);
+    setTool('select');
+    selected.clear();
+    copies.forEach((o) => o.type !== 'graph' && selected.add(o.id));
+    requestRender();
+    return true;
+  }
+
+  // ================== Ровные фигуры от руки ==================
+  // Нарисовал и задержал руку — штрих превращается в отрезок, круг или прямоугольник
+  let holdTimer = 0;
+  let holdAt = { x: 0, y: 0 };
+  function armHold() {
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(holdSnap, 600);
+  }
+  function holdSnap() {
+    if (!action || action.kind !== 'stroke' || !current) return;
+    const shape = recognizeShape(current);
+    if (!shape) return;
+    current = shape;
+    // отрезок можно дотянуть, не отпуская; круг и прямоугольник фиксируются
+    action = { kind: 'shape', fixed: !(shape.type === 'shape' && shape.shape === 'line') };
+    send({ t: 'live', page: pageId, id: current.id, obj: current });
+    requestRender();
+  }
+  function recognizeShape(st) {
+    const p = st.pts;
+    const n = p.length / 2;
+    if (n < 4) return null;
+    let L = 0, x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const x = p[2 * i], y = p[2 * i + 1];
+      if (i) L += Math.hypot(x - p[2 * i - 2], y - p[2 * i - 1]);
+      x0 = Math.min(x0, x);
+      x1 = Math.max(x1, x);
+      y0 = Math.min(y0, y);
+      y1 = Math.max(y1, y);
+    }
+    if (L * cam.s < 40) return null;
+    const ax = p[0], ay = p[1], bx = p[p.length - 2], by = p[p.length - 1];
+    const D = Math.hypot(bx - ax, by - ay);
+    const base = { id: st.id, type: 'shape', color: st.color, w: st.w };
+    if (dashOn) base.dash = 1;
+    if (D / L > 0.9) {
+      if (st.marker) return { ...st, pts: [ax, ay, bx, by] };
+      const a = snap({ x: ax, y: ay }), b = snap({ x: bx, y: by });
+      return { ...base, shape: 'line', x1: r1(a.x), y1: r1(a.y), x2: r1(b.x), y2: r1(b.y) };
+    }
+    if (st.marker || D > 0.2 * L) return null;
+    const rx = (x1 - x0) / 2, ry = (y1 - y0) / 2, cx = x0 + rx, cy = y0 + ry, mr = Math.min(rx, ry);
+    if (mr * cam.s < 8) return null;
+    let eE = 0, eR = 0;
+    for (let i = 0; i < n; i++) {
+      const x = p[2 * i], y = p[2 * i + 1];
+      eE += Math.abs(Math.hypot((x - cx) / rx, (y - cy) / ry) - 1);
+      eR += Math.min(x - x0, x1 - x, y - y0, y1 - y) / mr;
+    }
+    eE /= n;
+    eR /= n;
+    if (Math.min(eE, eR) > 0.2) return null;
+    const a = snap({ x: x0, y: y0 }), b = snap({ x: x1, y: y1 });
+    const o = { ...base, shape: eE <= eR ? 'ellipse' : 'rect', x1: r1(a.x), y1: r1(a.y), x2: r1(b.x), y2: r1(b.y) };
+    if (fillOn) o.fill = 1;
+    return o;
+  }
+
+  // ================== Подписи точек ==================
+  function nextLabel() {
+    const used = new Set(page().objects.filter((o) => o.type === 'point' && o.label).map((o) => o.label));
+    for (let n = 0; n < 20; n++) {
+      for (const ch of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+        const s = ch + (n || '');
+        if (!used.has(s)) return s;
+      }
+    }
+    return '';
+  }
+  async function editPointLabel(o) {
+    const v = await askText('Подпись точки', o.label || '');
+    const cur = page() && page().objects.find((x) => x.id === o.id);
+    if (!cur) return;
+    const next = { ...cur };
+    const label = v.trim().slice(0, 12);
+    if (label) next.label = label;
+    else delete next.label;
+    if (next.label !== cur.label) doUpdate([cur], [next]);
+  }
+
+  // ================== Следить за экраном участника ==================
+  let lastViewKey = '';
+  let lastViewSend = 0;
+  let viewTimer = 0;
+  function broadcastView() {
+    if (users.length < 2 || following || !ready) return;
+    const key = `${pageId}|${r1(cam.x)}|${r1(cam.y)}|${r2(cam.s)}|${W}|${H}`;
+    if (key === lastViewKey) return;
+    const t = now();
+    if (t - lastViewSend < 130) {
+      clearTimeout(viewTimer);
+      viewTimer = setTimeout(requestRender, 140);
+      return;
+    }
+    lastViewKey = key;
+    lastViewSend = t;
+    send({ t: 'view', page: pageId, x: r1(cam.x), y: r1(cam.y), w: r1(W / cam.s), h: r1(H / cam.s) });
+  }
+  function applyFollow(v) {
+    if (!pageById(v.page) || !(v.w > 0) || !(v.h > 0)) return;
+    if (v.page !== pageId) goToPage(v.page);
+    // показываем ту же область, даже если размеры экранов разные
+    const s = clamp(Math.min(W / v.w, H / v.h), MIN_ZOOM, MAX_ZOOM);
+    animateCam({ x: v.x + v.w / 2 - W / 2 / s, y: v.y + v.h / 2 - H / 2 / s, s }, 200);
+  }
+  function startFollow(uidKey) {
+    const u = users.find((x) => x.id === uidKey);
+    if (!u) return;
+    following = uidKey;
+    $('followText').textContent = 'Вы следите за экраном: ' + u.name;
+    $('followBar').hidden = false;
+    renderUsers();
+    const v = views.get(uidKey);
+    if (v) applyFollow(v);
+  }
+  function stopFollow() {
+    if (!following) return;
+    following = null;
+    lastViewKey = '';
+    $('followBar').hidden = true;
+    renderUsers();
+  }
+  $('followStop').onclick = stopFollow;
 
   // ================== Текст ==================
   let textState = null;
@@ -2436,7 +2970,7 @@
     updatePreview();
   }
   function updatePreview() {
-    const tex = mathInput.value.trim();
+    const tex = AsciiMath.toTex(mathInput.value);
     if (!tex) {
       preview.textContent = '';
       preview.classList.remove('err');
@@ -2452,7 +2986,7 @@
   }
   mathInput.addEventListener('input', updatePreview);
   mathInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       $('mathForm').requestSubmit();
     }
@@ -2460,25 +2994,26 @@
   let mathTarget = null;
   function openMathModal(target) {
     mathTarget = target;
-    mathInput.value = target.edit ? target.edit.tex : '';
+    mathInput.value = target.edit ? target.edit.src || target.edit.tex : '';
     updatePreview();
     showModal('mathModal');
     setTimeout(() => mathInput.focus(), 30);
   }
   $('mathForm').onsubmit = (e) => {
     e.preventDefault();
-    const tex = mathInput.value.trim();
+    const src = mathInput.value.trim();
+    const tex = AsciiMath.toTex(src); // «x^2/3» → LaTeX; исходная запись хранится для правки
     hideModal('mathModal');
     if (!mathTarget) return;
     if (mathTarget.edit) {
       const cur = page().objects.find((o) => o.id === mathTarget.edit.id);
       if (!cur) return;
       if (!tex) doRemove([cur.id]);
-      else if (tex !== cur.tex) doUpdate([cur], [{ ...cur, tex }]);
+      else if (tex !== cur.tex) doUpdate([cur], [{ ...cur, tex, src }]);
     } else if (tex) {
       const size = r2(TEXT_SIZES[widthIdx] / cam.s);
       const id = uid();
-      doAdd([{ id, type: 'math', x: r1(mathTarget.x), y: r1(mathTarget.y - size * 0.8), size, color, tex }]);
+      doAdd([{ id, type: 'math', x: r1(mathTarget.x), y: r1(mathTarget.y - size * 0.8), size, color, tex, src }]);
       setTool('select');
       selected.clear();
       selected.add(id);
@@ -2632,22 +3167,26 @@
     setTool('select');
   };
 
-  // ----- приглашение -----
-  $('invite').onclick = () => {
-    $('inviteLink').value = location.origin + '/b/' + boardId;
-    showModal('inviteModal');
-    setTimeout(() => $('inviteLink').select(), 30);
-  };
-  $('copyLink').onclick = async () => {
-    const link = $('inviteLink').value;
-    try {
-      await navigator.clipboard.writeText(link);
-    } catch {
-      $('inviteLink').select();
-      document.execCommand('copy');
-    }
-    $('copyLink').textContent = 'Скопировано';
-    setTimeout(() => ($('copyLink').textContent = 'Копировать'), 1500);
+  // ----- короткий вопрос (вместо системного окна) -----
+  let askResolve = null;
+  function askText(title, value = '') {
+    return new Promise((resolve) => {
+      $('askTitle').textContent = title;
+      $('askInput').value = value;
+      askResolve = resolve;
+      showModal('askModal');
+      setTimeout(() => {
+        $('askInput').focus();
+        $('askInput').select();
+      }, 30);
+    });
+  }
+  $('askForm').onsubmit = (e) => {
+    e.preventDefault();
+    hideModal('askModal');
+    const r = askResolve;
+    askResolve = null;
+    if (r) r($('askInput').value);
   };
 
   // ================== Картинки ==================
@@ -2709,7 +3248,33 @@
         return;
       }
     }
+    if (pasteClip()) e.preventDefault();
   });
+  // страницы из PDF: отдельный блокнот, на каждой странице закреплённая картинка
+  function addImagePages(list, title) {
+    if (!board || !list.length) return;
+    const nb = { id: uid(8), title: String(title || 'PDF').slice(0, 80) };
+    let first = null;
+    list.forEach((it, i) => {
+      const pg = { id: uid(8), nb: nb.id, bg: 'blank', objects: [] };
+      const img = { id: uid(), type: 'image', x: 0, y: 0, w: 1000, h: r1((it.h * 1000) / it.w), src: it.src, lock: 1 };
+      if (i === 0) {
+        board.notebooks.push(nb);
+        board.pages.push(pg);
+        send({ t: 'nb-add', nb, pageData: pg, index: board.notebooks.length - 1 });
+        first = pg.id;
+      } else {
+        board.pages.push(pg);
+        send({ t: 'page-add', pageData: pg, index: board.pages.length - 1 });
+      }
+      opAdd(pg.id, [img]);
+      // страница открывается по ширине экрана, с начала листа
+      const s = isMobile() ? (W - 20) / 1000 : clamp((W - 280) / 1000, 0.3, 1.3);
+      pageCams.set(pg.id, isMobile() ? { x: -10 / s, y: -70 / s, s } : { x: 500 - (W / 2 + 50) / s, y: -86 / s, s });
+    });
+    goToPage(first);
+    scheduleBackup();
+  }
 
   // ================== Панели ==================
   let curveHintShown = false;
@@ -2719,11 +3284,11 @@
       return;
     }
     commitText();
-    if (t !== 'curve') finishCurve();
+    if (t !== tool) finishCurve();
     tool = t;
     if (t !== 'select') selected.clear();
     document.querySelectorAll('.tool[data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === t));
-    if (t === 'curve' && !curveHintShown) {
+    if (CURVE_TOOLS.includes(t) && !curveHintShown) {
       curveHintShown = true;
       toast('Ставьте точки кликами — линия пройдёт ровно через них. Двойной клик или Enter — готово, клик по первой точке — замкнуть.', 6000);
     }
@@ -2747,6 +3312,7 @@
       if (before.length) doUpdate(before, before.map((o) => ({ ...o, color: c })));
     }
     updateSwatches();
+    savePrefs();
     requestRender();
   }
   const swatchEls = [];
@@ -2788,23 +3354,45 @@
     const s = document.createElement('span');
     s.style.height = [2, 4, 7][i] + 'px';
     b.append(s);
-    b.onclick = () => {
-      widthIdx = i;
-      widthEls.forEach((x, j) => x.classList.toggle('active', j === i));
-    };
+    b.onclick = () => setWidth(i);
     widthEls.push(b);
     $('widths').append(b);
   });
+  function setWidth(i) {
+    widthIdx = clamp(i, 0, WIDTHS.length - 1);
+    widthEls.forEach((x, j) => x.classList.toggle('active', j === widthIdx));
+    savePrefs();
+  }
   widthEls[widthIdx].classList.add('active');
 
+  $('fillToggle').classList.toggle('active', fillOn);
+  $('snapToggle').classList.toggle('active', snapOn);
+  $('labelToggle').classList.toggle('active', labelOn);
   $('fillToggle').onclick = () => {
     fillOn = !fillOn;
     $('fillToggle').classList.toggle('active', fillOn);
+    savePrefs();
+  };
+  $('dashToggle').onclick = () => {
+    dashOn = !dashOn;
+    $('dashToggle').classList.toggle('active', dashOn);
+    if (curveDraft) {
+      if (dashOn) curveDraft.dash = 1;
+      else delete curveDraft.dash;
+      requestRender();
+    }
   };
   $('snapToggle').onclick = () => {
     snapOn = !snapOn;
     $('snapToggle').classList.toggle('active', snapOn);
+    savePrefs();
     toast(snapOn ? 'Фигуры и точки прилипают к узлам клеток' : 'Привязка к клеткам выключена', 1600);
+  };
+  $('labelToggle').onclick = () => {
+    labelOn = !labelOn;
+    $('labelToggle').classList.toggle('active', labelOn);
+    savePrefs();
+    toast(labelOn ? 'Новые точки подписываются буквами: A, B, C…' : 'Точки без подписей', 1800);
   };
   $('undo').onclick = undo;
   $('redo').onclick = redo;
@@ -2812,6 +3400,7 @@
   // ----- участники и голос -----
   function setUsers(list) {
     users = list || [];
+    lastViewKey = ''; // новому участнику нужно сообщить, что я вижу
     renderUsers();
     voice.syncPeers(users);
     updateVoiceUI();
@@ -2826,11 +3415,13 @@
     const shown = sorted.slice(0, 6);
     for (const u of shown) {
       const a = document.createElement('span');
-      a.className = 'avatar';
+      a.className = 'avatar' + (u.id === myUid ? ' me' : '') + (u.id === following ? ' followed' : '');
       a.dataset.uid = u.id;
+      if (u.id !== myUid) a.onclick = () => (following === u.id ? stopFollow() : startFollow(u.id));
       a.style.background = u.color;
       a.textContent = (u.name || '?').trim().charAt(0).toUpperCase();
-      a.title = u.name + (u.id === myUid ? ' (вы)' : '') + (u.voice ? (u.muted ? ' — микрофон выключен' : ' — в голосовой связи') : '');
+      const vs = u.voice ? (u.muted ? ', микрофон выключен' : ', в голосовой связи') : '';
+      a.title = u.id === myUid ? `${u.name} — это вы${vs}` : `${u.name}${vs}. Нажмите, чтобы следить за экраном`;
       if (u.voice) {
         const badge = document.createElement('span');
         badge.className = 'badge' + (u.muted ? ' off' : '');
@@ -2892,6 +3483,7 @@
     $('bgSelect').value = pg.bg;
   }
   function stepPage(d) {
+    if (following) stopFollow();
     const pg = page();
     const list = nbPages(pg.nb);
     const i = list.indexOf(pg) + d;
@@ -3262,6 +3854,7 @@
       card.style.transform = cardTransform(i, i) + ' scale(1.12)';
     }
     setTimeout(() => {
+      if (following) stopFollow();
       goToPage(target.id);
       closeNotebooks();
     }, 170);
@@ -3344,19 +3937,10 @@
   }
 
   // ----- масштаб -----
-  $('zoomIn').onclick = () => zoomAt(W / 2, H / 2, 1.25);
-  $('zoomOut').onclick = () => zoomAt(W / 2, H / 2, 0.8);
-  $('zoomLabel').onclick = () => zoomAt(W / 2, H / 2, 1 / cam.s);
-  $('zoomFit').onclick = () => {
-    const pg = page();
-    const b = pg && contentBounds(pg);
-    if (!b) {
-      cam = defaultCam(pg);
-      return requestRender();
-    }
-    const s = clamp(Math.min((W - 160) / b.w, (H - 160) / b.h), MIN_ZOOM, 2);
-    centerOn(b.x + b.w / 2, b.y + b.h / 2, s);
-  };
+  $('zoomIn').onclick = () => zoomBy(1.25);
+  $('zoomOut').onclick = () => zoomBy(0.8);
+  $('zoomLabel').onclick = () => zoomBy(1 / cam.s);
+  $('zoomFit').onclick = zoomFit;
 
   // ----- название -----
   let titleTimer;
@@ -3401,6 +3985,9 @@
     }
     closeMenu();
     if (act === 'rename') askName();
+    else if (act === 'help') emit('help');
+    else if (act === 'pdf') emit('pdf');
+    else if (act === 'unlock') unlockAll();
     else if (act === 'print') printBoard();
     else if (act === 'save') saveToFile();
     else if (act === 'open') $('boardFile').click();
@@ -3553,15 +4140,28 @@
           pages: board.pages.map((p) => ({ ...p, objects: p.objects.filter((o) => o.type !== 'image') })),
         });
       }
+      rememberBoard(true);
     }, 1500);
   }
-  function rememberBoard() {
+  function rememberBoard(withThumb) {
     let list = store.get('wb:recent', []);
     if (!Array.isArray(list)) list = [];
+    const prev = list.find((r) => r && r.id === boardId) || {};
+    let thumb = prev.thumb;
+    if (withThumb && page()) {
+      // маленькая картинка текущей страницы — для списка досок на главной
+      try {
+        pageThumb(page(), 240, 150);
+        const t = thumbCache.get(pageId);
+        if (t && t.src.length < 160000) thumb = t.src;
+      } catch {
+        /* без превью */
+      }
+    }
     list = list.filter((r) => r && r.id !== boardId);
-    list.unshift({ id: boardId, title: board ? board.title || '' : '', at: Date.now() });
+    list.unshift({ id: boardId, title: board ? board.title || '' : '', at: Date.now(), thumb });
     list = list.slice(0, 20);
-    store.set('wb:recent', list);
+    if (!store.set('wb:recent', list)) store.set('wb:recent', list.map((r) => ({ id: r.id, title: r.title, at: r.at })));
     try {
       const keep = new Set(list.map((r) => 'wb:board:' + r.id));
       for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -3580,7 +4180,7 @@
   }
   const KEYS = {
     v: 'select', h: 'hand', p: 'pen', m: 'marker', e: 'eraser', k: 'laser', l: 'line', a: 'arrow', r: 'rect', o: 'ellipse',
-    y: 'triangle', c: 'plot', d: 'point', b: 'curve', t: 'text', f: 'math', g: 'graph',
+    y: 'triangle', n: 'poly', c: 'plot', d: 'point', b: 'curve', t: 'text', f: 'math', g: 'graph',
   };
   window.addEventListener('keydown', (e) => {
     if (!board) return;
@@ -3610,7 +4210,7 @@
     if (mod && key === 'a') {
       e.preventDefault();
       setTool('select');
-      for (const o of page().objects) selected.add(o.id);
+      for (const o of page().objects) if (!o.lock) selected.add(o.id);
       return requestRender();
     }
     if (mod && key === 'd') {
@@ -3619,7 +4219,18 @@
       duplicateSelection();
       return;
     }
+    if (mod && (key === 'c' || key === 'x')) {
+      if (!selected.size || !copySelection()) return;
+      e.preventDefault();
+      if (key === 'x') doRemove([...selected]);
+      else toast('Скопировано. Вставить: Ctrl+V', 1400);
+      return;
+    }
     if (mod) return;
+    if (e.key === '?' || e.key === 'F1') {
+      e.preventDefault();
+      return emit('help');
+    }
     if (e.key === ' ' && !spaceDown) {
       spaceDown = true;
       setCursor();
@@ -3632,6 +4243,32 @@
       e.preventDefault();
       return doRemove([...selected]);
     }
+    if (e.key.startsWith('Arrow')) {
+      e.preventDefault();
+      const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      if (selected.size) {
+        // стрелки двигают выделенное: на четверть клетки, с Shift — на клетку
+        const d = e.shiftKey ? G : G / 4;
+        patchSelected((o) => transformObj(o, (x) => x + dir[0] * d, (y) => y + dir[1] * d, 1));
+      } else {
+        userMovedCam();
+        cam.x += (dir[0] * 80) / cam.s;
+        cam.y += (dir[1] * 80) / cam.s;
+        requestRender();
+      }
+      return;
+    }
+    if (e.code && /^Digit\d$/.test(e.code)) {
+      const n = Number(e.code.slice(5));
+      if (e.shiftKey) return n === 1 ? zoomFit() : undefined;
+      if (n === 0) return zoomBy(1 / cam.s);
+      if (n <= PALETTE.length) return chooseColor(PALETTE[n - 1]);
+      return;
+    }
+    if (e.key === '+' || e.key === '=') return zoomBy(1.25);
+    if (e.key === '-' || e.key === '_') return zoomBy(0.8);
+    if (e.code === 'BracketLeft') return setWidth(widthIdx - 1);
+    if (e.code === 'BracketRight') return setWidth(widthIdx + 1);
     if (e.key === 'Escape') {
       selected.clear();
       return requestRender();
@@ -3646,20 +4283,8 @@
   });
 
   function duplicateSelection() {
-    const orig = originals();
-    const plotIds = new Map();
-    const copies = [];
-    for (const o of orig) {
-      if (o.type === 'graph' && o.plot) continue; // графики копируются вместе с плоскостью
-      const c = { ...transformObj(o, (x) => x + G, (y) => y + G, 1), id: uid() };
-      if (o.type === 'graph') continue;
-      if (o.type === 'plot') plotIds.set(o.id, c.id);
-      copies.push(c);
-    }
-    for (const g of page().objects) {
-      if (g.type === 'graph' && plotIds.has(g.plot)) copies.push({ ...g, id: uid(), plot: plotIds.get(g.plot) });
-    }
-    if (!copies.length) return;
+    const copies = cloneForPaste(selectionWithGraphs().filter((o) => o.type !== 'graph' || o.plot), G, G);
+    if (!copies.some((o) => o.type !== 'graph')) return;
     doAdd(copies);
     selected.clear();
     copies.forEach((o) => o.type !== 'graph' && selected.add(o.id));
@@ -3667,6 +4292,8 @@
 
   // ================== Запуск ==================
   window.addEventListener('resize', resize);
+  // уходя со страницы, обновляем превью доски для главной
+  window.addEventListener('pagehide', () => board && rememberBoard(true));
   // когда шрифты формул догрузились, размеры формул меняются — перерисовываем
   if (document.fonts) {
     document.fonts.addEventListener('loadingdone', requestRender);
@@ -3679,6 +4306,22 @@
   updateVoiceUI();
   if (!me.name) askName();
   connect();
+
+  // интерфейс для дополнений (extras.js)
+  window.WB = {
+    boardId,
+    on: (name, fn) => (hooks[name] = hooks[name] || []).push(fn),
+    send,
+    toast,
+    showModal,
+    hideModal,
+    ready: () => ready,
+    myUid: () => myUid,
+    users: () => users,
+    adaptColor: (c) => adaptColor(c, isDark()),
+    addImageFile,
+    addImagePages,
+  };
 
   // для автоматических проверок
   window.__board = {

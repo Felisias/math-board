@@ -1,0 +1,36 @@
+name: Приложение для Windows
+
+# Собирает установщик и переносную версию приложения.
+# Запускается вручную (Actions → «Приложение для Windows» → Run workflow) или при метке версии v*.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Установка зависимостей
+        working-directory: desktop
+        run: npm install
+      - name: Сборка
+        working-directory: desktop
+        run: npm run dist
+      - name: Файлы сборки
+        uses: actions/upload-artifact@v4
+        with:
+          name: Doska-Windows
+          path: desktop/dist/*.exe
+      - name: Публикация в Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/dist/*.exe

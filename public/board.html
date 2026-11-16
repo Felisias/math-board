@@ -15,12 +15,13 @@
 </script>
 <link rel="stylesheet" href="/vendor/katex/katex.min.css">
 <link rel="stylesheet" href="/css/board.css">
+<link rel="stylesheet" href="/css/extras.css">
 </head>
 <body>
 <div id="app">
   <!-- Верхняя панель -->
   <header id="topbar">
-    <a href="/" class="icon-btn" title="На главную" aria-label="На главную">
+    <a href="/" class="icon-btn" title="Все доски" aria-label="Все доски">
       <svg viewBox="0 0 24 24"><path d="M4 11l8-7 8 7M6 9.5V20h12V9.5"/></svg>
     </a>
     <input id="title" placeholder="Название доски" maxlength="120" autocomplete="off">
@@ -44,6 +45,10 @@
         <svg viewBox="0 0 24 24"><path d="M3.5 13.5c4.7-4.2 12.3-4.2 17 0l-1.8 2.6-3.4-1.3-.3-2.4a10 10 0 00-6 0l-.3 2.4-3.4 1.3z"/></svg>
       </button>
     </div>
+    <button class="icon-btn" id="chatBtn" title="Чат" aria-label="Чат">
+      <svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg>
+      <span class="count" id="chatBadge" hidden></span>
+    </button>
     <div id="users"></div>
     <span id="conn" title="Соединение"></span>
     <button id="invite" class="primary-btn">Пригласить</button>
@@ -54,10 +59,14 @@
       <div id="menu" class="dropdown" hidden>
         <button data-act="rename">Изменить моё имя</button>
         <button data-act="theme" id="themeItem">Тема: как в системе</button>
+        <button data-act="help">Горячие клавиши и подсказки</button>
+        <hr>
+        <button data-act="pdf">Импорт PDF (задания, учебник)</button>
         <button data-act="print">Печать / сохранить в PDF</button>
         <button data-act="save">Скачать доску (файл)</button>
         <button data-act="open">Открыть доску из файла</button>
         <hr>
+        <button data-act="unlock">Открепить всё на странице</button>
         <button data-act="clear" class="danger">Очистить страницу</button>
         <button data-act="delpage" class="danger">Удалить страницу</button>
       </div>
@@ -68,25 +77,26 @@
   <nav id="toolbar">
     <div class="tools">
       <button class="tool" data-tool="select" title="Выделить и двигать (V)"><svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.5L10 19z"/></svg></button>
-      <button class="tool" data-tool="hand" title="Двигать доску (H или пробел)"><svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 013 0V12M11 11V4a1.5 1.5 0 013 0v7M14 11V5.5a1.5 1.5 0 013 0V14c0 4-2.5 7-6.5 7S5 18 4 15l-1-3a1.5 1.5 0 012.6-1.4L8 13"/></svg></button>
+      <button class="tool" data-tool="hand" title="Двигать доску (H)"><svg viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 013 0V12M11 11V4a1.5 1.5 0 013 0v7M14 11V5.5a1.5 1.5 0 013 0V14c0 4-2.5 7-6.5 7S5 18 4 15l-1-3a1.5 1.5 0 012.6-1.4L8 13"/></svg></button>
       <button class="tool" data-tool="pen" title="Карандаш (P)"><svg viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/></svg></button>
       <button class="tool" data-tool="marker" title="Выделитель (M)"><svg viewBox="0 0 24 24"><path d="M9 15l-2 5h5l1-2"/><path d="M9 15l7-11 4 3-7 11z"/><path class="fill-hl" d="M3 21h18" stroke-width="3"/></svg></button>
       <button class="tool" data-tool="eraser" title="Ластик (E)"><svg viewBox="0 0 24 24"><path d="M8 20l-5-5L14 4l7 7-9 9z"/><path d="M8 20h13M9 9l6 6"/></svg></button>
       <button class="tool" data-tool="laser" title="Указка (K)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" class="laser-dot"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg></button>
       <div class="sep"></div>
       <button class="tool" data-tool="line" title="Отрезок (L)"><svg viewBox="0 0 24 24"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.6"/><circle cx="19" cy="5" r="1.6"/></svg></button>
-      <button class="tool" data-tool="arrow" title="Стрелка / вектор (A)"><svg viewBox="0 0 24 24"><path d="M5 19L19 5M11 5h8v8"/></svg></button>
+      <button class="tool" data-tool="arrow" title="Стрелка, вектор (A)"><svg viewBox="0 0 24 24"><path d="M5 19L19 5M11 5h8v8"/></svg></button>
       <button class="tool" data-tool="rect" title="Прямоугольник (R)"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
-      <button class="tool" data-tool="ellipse" title="Окружность / эллипс (O)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg></button>
+      <button class="tool" data-tool="ellipse" title="Окружность, эллипс (O)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg></button>
       <button class="tool" data-tool="triangle" title="Треугольник (Y)"><svg viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/></svg></button>
-      <button class="tool" data-tool="plot" title="Координатная плоскость (C) — растяните как прямоугольник"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="1.5" class="thin"/><path d="M12 5v14M5 12h14"/><path d="M12 5l-2 2.5M12 5l2 2.5M19 12l-2.5-2M19 12l-2.5 2"/></svg></button>
+      <button class="tool" data-tool="poly" title="Ломаная, многоугольник (N)"><svg viewBox="0 0 24 24"><path d="M4 17l4-10 7 6 5-8"/><circle cx="4" cy="17" r="1.7" class="solid"/><circle cx="8" cy="7" r="1.7" class="solid"/><circle cx="15" cy="13" r="1.7" class="solid"/><circle cx="20" cy="5" r="1.7" class="solid"/></svg></button>
       <div class="sep"></div>
+      <button class="tool" data-tool="plot" title="Координатная плоскость (C)"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="1.5" class="thin"/><path d="M12 5v14M5 12h14"/><path d="M12 5l-2 2.5M12 5l2 2.5M19 12l-2.5-2M19 12l-2.5 2"/></svg></button>
+      <button class="tool" data-tool="graph" title="График функции (G)"><svg viewBox="0 0 24 24"><path d="M3 12h18M12 3v18" class="thin"/><path d="M5 20c3-10 5-14 7-14s4 4 7 14"/></svg></button>
       <button class="tool" data-tool="point" title="Точка (D)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.6" class="solid"/><path d="M12 4v2.5M12 17.5V20M4 12h2.5M17.5 12H20" class="thin"/></svg></button>
       <button class="tool" data-tool="curve" title="Плавная кривая по точкам (B)"><svg viewBox="0 0 24 24"><path d="M3 18C6 6 10 4 12 11s6 7 9-5"/><circle cx="3" cy="18" r="1.7" class="solid"/><circle cx="12" cy="11" r="1.7" class="solid"/><circle cx="21" cy="6" r="1.7" class="solid"/></svg></button>
       <button class="tool" data-tool="text" title="Текст (T)"><svg viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg></button>
       <button class="tool" data-tool="math" title="Формула (F)"><svg viewBox="0 0 24 24"><path d="M17 5H7l6 7-6 7h10"/></svg></button>
-      <button class="tool" data-tool="graph" title="График функции (G)"><svg viewBox="0 0 24 24"><path d="M3 12h18M12 3v18" class="thin"/><path d="M5 20c3-10 5-14 7-14s4 4 7 14"/></svg></button>
-      <button class="tool" data-tool="image" title="Картинка (или Ctrl+V)"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg></button>
+      <button class="tool" data-tool="image" title="Картинка (Ctrl+V)"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg></button>
     </div>
     <div class="sep"></div>
     <div id="colors"></div>
@@ -95,7 +105,9 @@
     <div class="sep"></div>
     <div class="toggles">
       <button class="tool toggle" id="fillToggle" title="Заливка фигур"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" class="fill-sq"/></svg></button>
+      <button class="tool toggle" id="dashToggle" title="Пунктирная линия"><svg viewBox="0 0 24 24"><path d="M3 12h4M10 12h4M17 12h4"/></svg></button>
       <button class="tool toggle" id="snapToggle" title="Привязка к клеткам"><svg viewBox="0 0 24 24"><path d="M6 4v7a6 6 0 0012 0V4"/><path d="M6 8h4M14 8h4"/></svg></button>
+      <button class="tool toggle" id="labelToggle" title="Подписывать точки буквами A, B, C…"><svg viewBox="0 0 24 24"><path d="M5 19L10.5 5l5.5 14M7.4 13.5h6.2"/><circle cx="19.5" cy="7" r="1.8" class="solid"/></svg></button>
     </div>
   </nav>
 
@@ -104,7 +116,40 @@
     <canvas id="canvas"></canvas>
     <div id="mathLayer"></div>
     <textarea id="textEditor" spellcheck="false" hidden></textarea>
+    <div id="dropHint" hidden><div>Отпустите, чтобы добавить на доску</div></div>
   </div>
+
+  <!-- Панель выделенного объекта -->
+  <div id="selBar" hidden>
+    <button data-sel="edit" title="Изменить (двойной клик)"><svg viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z"/></svg></button>
+    <button data-sel="thin" title="Тоньше, мельче"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+    <button data-sel="thick" title="Толще, крупнее"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button>
+    <button data-sel="dash" title="Пунктир"><svg viewBox="0 0 24 24"><path d="M3 12h4M10 12h4M17 12h4"/></svg></button>
+    <button data-sel="fill" title="Заливка"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" fill-opacity=".25"/></svg></button>
+    <i></i>
+    <button data-sel="front" title="На передний план"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="1.5" fill="currentColor" fill-opacity=".3"/><path d="M15 5H5v10"/></svg></button>
+    <button data-sel="back" title="На задний план"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="11" height="11" rx="1.5"/><path d="M9 19h10V9" fill="none"/><rect x="9" y="9" width="10" height="10" rx="1.5" fill="currentColor" fill-opacity=".3" stroke="none"/></svg></button>
+    <button data-sel="lock" title="Закрепить, чтобы не сдвинуть случайно"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></button>
+    <i></i>
+    <button data-sel="dup" title="Дублировать (Ctrl+D)"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg></button>
+    <button data-sel="del" class="danger" title="Удалить (Delete)"><svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg></button>
+  </div>
+
+  <!-- Слежение за участником -->
+  <div id="followBar" hidden>
+    <span id="followText"></span>
+    <button id="followStop">Перестать</button>
+  </div>
+
+  <!-- Чат -->
+  <aside id="chatPanel" hidden>
+    <header><b>Чат</b><button class="icon-btn" id="chatClose" aria-label="Закрыть чат"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
+    <div id="chatList"></div>
+    <form id="chatForm">
+      <input id="chatInput" maxlength="1000" placeholder="Сообщение…" autocomplete="off">
+      <button class="icon-btn" type="submit" aria-label="Отправить"><svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-3-6z"/></svg></button>
+    </form>
+  </aside>
 
   <!-- Блокноты и страницы -->
   <div id="pagebar">
@@ -130,10 +175,10 @@
   </div>
 
   <div id="zoombar">
-    <button class="icon-btn" id="zoomOut" title="Отдалить" aria-label="Отдалить"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
-    <button class="text-btn" id="zoomLabel" title="Вернуть 100%">100%</button>
-    <button class="icon-btn" id="zoomIn" title="Приблизить" aria-label="Приблизить"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
-    <button class="icon-btn" id="zoomFit" title="Показать всё" aria-label="Показать всё"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <button class="icon-btn" id="zoomOut" title="Отдалить (−)" aria-label="Отдалить"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+    <button class="text-btn" id="zoomLabel" title="Вернуть 100% (0)">100%</button>
+    <button class="icon-btn" id="zoomIn" title="Приблизить (+)" aria-label="Приблизить"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button class="icon-btn" id="zoomFit" title="Показать всё (1)" aria-label="Показать всё"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
   </div>
 </div>
 
@@ -169,14 +214,26 @@
   </form>
 </div>
 
+<!-- Окно: короткий вопрос -->
+<div class="modal" id="askModal" hidden>
+  <form class="modal-card" id="askForm">
+    <h3 id="askTitle"></h3>
+    <input id="askInput" maxlength="40" autocomplete="off">
+    <div class="modal-actions">
+      <button type="button" class="secondary-btn" data-close>Отмена</button>
+      <button type="submit" class="primary-btn">Готово</button>
+    </div>
+  </form>
+</div>
+
 <!-- Окно: формула -->
 <div class="modal" id="mathModal" hidden>
   <form class="modal-card wide" id="mathForm">
     <h3>Формула</h3>
-    <div class="snippets" id="snippets"></div>
-    <textarea id="mathInput" rows="3" spellcheck="false" placeholder="Например: x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"></textarea>
+    <textarea id="mathInput" rows="2" spellcheck="false" placeholder="Пишите как в тетради: x^2/3, sqrt(x+1), (a+b)/(a-b), x_1, a <= b"></textarea>
     <div id="mathPreview" class="preview"></div>
-    <p class="hint">Запись в формате LaTeX. Кнопки выше вставляют шаблоны. Ctrl+Enter — вставить.</p>
+    <div class="snippets" id="snippets"></div>
+    <p class="hint">Дробь — через <kbd>/</kbd>, степень — <kbd>^</kbd>, индекс — <kbd>_</kbd>, корень — <kbd>sqrt( )</kbd>. Кнопки вставляют готовые шаблоны, LaTeX тоже понимается. <kbd>Enter</kbd> — вставить, <kbd>Shift+Enter</kbd> — новая строка.</p>
     <div class="modal-actions">
       <button type="button" class="secondary-btn" data-close>Отмена</button>
       <button type="submit" class="primary-btn">Вставить</button>
@@ -224,25 +281,64 @@
 
 <!-- Окно: приглашение -->
 <div class="modal" id="inviteModal" hidden>
-  <div class="modal-card">
+  <div class="modal-card" id="inviteCard">
     <h3>Пригласить на доску</h3>
-    <p class="hint">Все, у кого есть эта ссылка, могут рисовать на доске.</p>
-    <div class="copy-row">
-      <input id="inviteLink" readonly>
-      <button class="primary-btn" id="copyLink">Копировать</button>
-    </div>
+    <div id="inviteBody"></div>
     <div class="modal-actions"><button type="button" class="secondary-btn" data-close>Закрыть</button></div>
   </div>
 </div>
 
+<!-- Окно: справка -->
+<div class="modal" id="helpModal" hidden>
+  <div class="modal-card wide">
+    <h3>Горячие клавиши и подсказки</h3>
+    <div class="help-grid">
+      <div>
+        <h4>Инструменты</h4>
+        <p><kbd>V</kbd> выделение · <kbd>H</kbd> рука · <kbd>P</kbd> карандаш</p>
+        <p><kbd>M</kbd> выделитель · <kbd>E</kbd> ластик · <kbd>K</kbd> указка</p>
+        <p><kbd>L</kbd> отрезок · <kbd>A</kbd> стрелка · <kbd>R</kbd> прямоугольник</p>
+        <p><kbd>O</kbd> окружность · <kbd>Y</kbd> треугольник · <kbd>N</kbd> ломаная</p>
+        <p><kbd>C</kbd> плоскость · <kbd>G</kbd> график · <kbd>D</kbd> точка · <kbd>B</kbd> кривая</p>
+        <p><kbd>T</kbd> текст · <kbd>F</kbd> формула</p>
+        <p><kbd>1</kbd>–<kbd>8</kbd> цвет · <kbd>[</kbd> <kbd>]</kbd> толщина</p>
+      </div>
+      <div>
+        <h4>Правка</h4>
+        <p><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd> отменить / повторить</p>
+        <p><kbd>Ctrl+C</kbd> <kbd>Ctrl+X</kbd> <kbd>Ctrl+V</kbd> копировать, вырезать, вставить</p>
+        <p><kbd>Ctrl+D</kbd> дублировать · <kbd>Alt</kbd>+перетаскивание — копия</p>
+        <p><kbd>Delete</kbd> удалить · <kbd>Ctrl+A</kbd> выделить всё</p>
+        <p><kbd>←↑→↓</kbd> сдвинуть выделенное (<kbd>Shift</kbd> — на клетку)</p>
+        <h4>Вид</h4>
+        <p><kbd>Пробел</kbd>+мышь или правая кнопка — двигать доску</p>
+        <p><kbd>Ctrl</kbd>+колесо, <kbd>+</kbd> <kbd>−</kbd> масштаб · <kbd>0</kbd> 100% · <kbd>Shift+1</kbd> показать всё</p>
+        <p><kbd>PgUp</kbd> <kbd>PgDn</kbd> страницы</p>
+      </div>
+    </div>
+    <h4>Полезные приёмы</h4>
+    <ul class="help-list">
+      <li><b>Ровные фигуры от руки.</b> Нарисуйте карандашом линию, круг или прямоугольник и задержите руку на полсекунды — фигура выровняется.</li>
+      <li><b>Shift</b> при рисовании даёт квадрат, круг и отрезок под углом, кратным 15°.</li>
+      <li><b>Парабола по точкам.</b> Поставьте точки (<kbd>D</kbd>), затем кривой (<kbd>B</kbd>) кликните по ним. Потом точки кривой можно двигать.</li>
+      <li><b>Следить за учителем.</b> Нажмите на кружок участника вверху — ваш экран будет повторять его.</li>
+      <li><b>Картинки и PDF</b> можно просто перетащить на доску.</li>
+    </ul>
+    <div class="modal-actions"><button type="button" class="primary-btn" data-close>Понятно</button></div>
+  </div>
+</div>
+
 <input type="file" id="imageFile" accept="image/*" hidden>
+<input type="file" id="pdfFile" accept="application/pdf,.pdf" hidden>
 <input type="file" id="boardFile" accept=".json,application/json" hidden>
 <div id="toast" hidden></div>
 <div id="printArea"></div>
 
 <script src="/vendor/katex/katex.min.js"></script>
 <script src="/js/mathparse.js"></script>
+<script src="/js/asciimath.js"></script>
 <script src="/js/voice.js"></script>
 <script src="/js/board.js"></script>
+<script src="/js/extras.js"></script>
 </body>
 </html>

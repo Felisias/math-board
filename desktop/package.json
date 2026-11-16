@@ -1,0 +1,51 @@
+{
+  "name": "math-board-desktop",
+  "version": "2.0.0",
+  "description": "Доска для уроков математики — приложение для компьютера",
+  "author": "Felisias",
+  "license": "MIT",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "node prepare.js && electron-builder --win --publish never"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.felisias.mathboard",
+    "productName": "Doska",
+    "artifactName": "Doska-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "app/**/*",
+      "build/icon.png",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "Доска",
+      "artifactName": "Doska-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Doska-Portable-${version}.${ext}"
+    }
+  }
+}
