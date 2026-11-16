@@ -1,14 +1,25 @@
 name: Приложение для Windows
 
-# Собирает установщик и переносную версию приложения.
-# Запускается вручную (Actions → «Приложение для Windows» → Run workflow) или при метке версии v*.
+# Собирает установщик и переносную версию приложения и кладёт их в Releases
+# (выпуск «Приложение для Windows»). Запускается при изменениях доски в ветке main
+# или вручную: Actions → «Приложение для Windows» → Run workflow.
 on:
   workflow_dispatch:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'public/**'
+      - 'server.js'
+      - 'tunnel.js'
+      - '.github/workflows/desktop.yml'
 
 permissions:
   contents: write
+
+concurrency:
+  group: desktop-build
+  cancel-in-progress: true
 
 jobs:
   windows:
@@ -30,7 +41,15 @@ jobs:
           name: Doska-Windows
           path: desktop/dist/*.exe
       - name: Публикация в Releases
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: desktop
+          name: Приложение для Windows
+          body: |
+            Свежая сборка приложения «Доска» для Windows.
+
+            - **Doska-Setup.exe** — установщик (появится ярлык «Доска»)
+            - **Doska-Portable.exe** — запускается без установки
+
+            При первом запуске Windows может показать предупреждение SmartScreen: «Подробнее» → «Выполнить в любом случае».
           files: desktop/dist/*.exe

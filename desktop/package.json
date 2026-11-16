@@ -42,10 +42,10 @@
       "oneClick": true,
       "perMachine": false,
       "shortcutName": "Доска",
-      "artifactName": "Doska-Setup-${version}.${ext}"
+      "artifactName": "Doska-Setup.${ext}"
     },
     "portable": {
-      "artifactName": "Doska-Portable-${version}.${ext}"
+      "artifactName": "Doska-Portable.${ext}"
     }
   }
 }
